@@ -7,8 +7,9 @@ on:
       - ".github/workflows/watchdog.yml"
   workflow_dispatch:
   schedule:
-    # Offset from the main 3,13,23,33,43,53 schedule.
-    - cron: "8,38 * * * *"
+    # Health-only checks are cheap and do not hit the search index unless recovery is needed.
+    # These are offset from the main 3,13,23,33,43,53 schedule.
+    - cron: "8,28,48 * * * *"
 
 permissions:
   contents: write
@@ -35,7 +36,7 @@ jobs:
         id: freshness
         shell: bash
         run: |
-          if python fetch.py --check-latest --max-fetch-age-seconds 4500; then
+          if python fetch.py --check-latest --max-fetch-age-seconds 3600; then
             echo "stale=false" >> "$GITHUB_OUTPUT"
           else
             echo "stale=true" >> "$GITHUB_OUTPUT"
