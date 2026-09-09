@@ -9,9 +9,6 @@ on:
       - ".github/workflows/update.yml"
   workflow_dispatch:
   schedule:
-    # Trendonify is effectively daily for this series; 10-minute fresh-runner polling
-    # is fast enough while materially reducing search-index challenge pressure.
-    # Avoid minute 0, where GitHub documents higher schedule congestion.
     - cron: "3-53/10 * * * *"
 
 permissions:
@@ -52,7 +49,6 @@ jobs:
           import json
           import subprocess
           from datetime import datetime, timezone
-
           with open("latest.json", encoding="utf-8") as f:
               new = json.load(f)
           try:
@@ -61,22 +57,14 @@ jobs:
               ))
           except Exception:
               old = {}
-
           keys = (
               "schema_version", "ok", "forward_pe", "percentile_10y",
               "data_date", "source", "source_url", "source_kind", "fetch_method",
           )
           material = any(old.get(k) != new.get(k) for k in keys)
-          heartbeat = False
-          if not material:
-              try:
-                  old_ts = datetime.fromisoformat(old["fetched_at"].replace("Z", "+00:00"))
-                  heartbeat = (datetime.now(timezone.utc) - old_ts).total_seconds() >= 2400
-              except Exception:
-                  heartbeat = True
-
+          heartbeat = not material
           needed = material or heartbeat
-          print(f"material={material} heartbeat={heartbeat} needed={needed}")
+          print(f"integration_test=True material={material} heartbeat={heartbeat} needed={needed}")
           with open("/tmp/needed", "w") as f:
               f.write("true" if needed else "false")
           PY
@@ -91,7 +79,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add latest.json
           git commit -m "Update Nasdaq 100 forward P/E"
-
           for attempt in 1 2 3; do
             if git push; then
               exit 0
