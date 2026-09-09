@@ -23,8 +23,9 @@ CANONICAL = "https://trendonify.com/forward-pe-ratio"
 MAIN = "https://trendonify.com/united-states/stock-market/nasdaq-100"
 DEDICATED = "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
 JINA_PREFIX = "https://r.jina.ai/"
-SEARCH_QUERY = 'Trendonify "Nasdaq 100" "Forward P/E Ratio" "Percentile Rank (10Y)"'
+SEARCH_QUERY = 'site:trendonify.com/forward-pe-ratio "Nasdaq 100" "Percentile Rank (10Y)" "Last Update"'
 SEARCH_URLS = [
+    ("bing-rss", "https://www.bing.com/search?format=rss&q=" + quote_plus(SEARCH_QUERY)),
     ("bing", "https://www.bing.com/search?q=" + quote_plus(SEARCH_QUERY) + "&count=10"),
     ("google", "https://www.google.com/search?q=" + quote_plus(SEARCH_QUERY) + "&num=10&hl=en"),
     ("duckduckgo", "https://html.duckduckgo.com/html/?q=" + quote_plus(SEARCH_QUERY)),
@@ -76,8 +77,8 @@ def parse_table(html: str, method: str, kind: str = "forward-pe-ratio-table") ->
 
     text = clean(html)
     m = re.search(
-        r"Nasdaq\s+100.{0,100}?(\d{1,2}(?:\.\d+)?).{0,100}?(\d{1,3}(?:\.\d+)?)\s*%.{0,120}?"
-        r"(?:Attractive|Undervalued|Fair\s+Value|Overvalued|Expensive).{0,120}?"
+        r"Nasdaq\s+100.{0,140}?(\d{1,2}(?:\.\d+)?).{0,140}?(\d{1,3}(?:\.\d+)?)\s*%.{0,160}?"
+        r"(?:Attractive|Undervalued|Fair\s+Value|Overvalued|Expensive).{0,160}?"
         r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},\s+\d{4})",
         text,
         re.I,
@@ -159,7 +160,6 @@ def acquire(previous):
 
     errors = []
 
-    # 1) Direct canonical page. GitHub-hosted runners often receive 403, so fail fast.
     try:
         html, method = fetch_html(CANONICAL, attempts=1, stop_on_403=True)
         c = parse_table(html, method)
@@ -168,8 +168,6 @@ def acquire(previous):
     except Exception as e:
         errors.append(f"canonical-direct: {type(e).__name__}: {e}")
 
-    # 2) Jina Reader is transport only: it fetches and renders the same Trendonify URL.
-    # The accepted fields still must parse from Trendonify's canonical Nasdaq 100 row.
     try:
         html, method = fetch_html(JINA_PREFIX + CANONICAL, attempts=2)
         c = parse_table(html, f"jina-reader/{method}", kind="forward-pe-ratio-table-jina")
@@ -178,7 +176,6 @@ def acquire(previous):
     except Exception as e:
         errors.append(f"jina-canonical: {type(e).__name__}: {e}")
 
-    # 3) Search-index transport for the exact same Trendonify row.
     for engine, url in SEARCH_URLS:
         try:
             html, method = fetch_html(url, attempts=1)
@@ -188,8 +185,6 @@ def acquire(previous):
         except Exception as e:
             errors.append(f"search-{engine}: {type(e).__name__}: {e}")
 
-    # 4) Last-resort fallback pages, first through Jina then direct. They are consulted
-    # only if the canonical row cannot be obtained, preventing cross-page disagreement noise.
     for url, kind in ((MAIN, "nasdaq-100-main-page"), (DEDICATED, "dedicated-forward-pe-page")):
         try:
             html, method = fetch_html(JINA_PREFIX + url, attempts=1)
@@ -231,7 +226,6 @@ def main():
         print(json.dumps(payload))
         return 0
     except Exception as e:
-        # Preserve last-known-good latest.json on failure.
         print(f"ERROR: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
