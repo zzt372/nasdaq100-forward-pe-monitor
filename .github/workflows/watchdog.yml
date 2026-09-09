@@ -7,61 +7,51 @@ on:
       - ".github/workflows/watchdog.yml"
   workflow_dispatch:
   schedule:
-    - cron: "7,22,37,52 * * * *"
+    # Offset from the main 3,13,23,33,43,53 schedule.
+    - cron: "8,38 * * * *"
 
 permissions:
   contents: write
 
 concurrency:
   group: nasdaq100-forward-pe-update
-  cancel-in-progress: false
+  queue: max
 
 jobs:
   recover:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 4
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - name: Check latest.json freshness
+      - name: Check committed state health
         id: freshness
         shell: bash
         run: |
-          python - <<'PY'
-          import json
-          from datetime import datetime, timezone
+          if python fetch.py --check-latest --max-fetch-age-seconds 4500; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
 
-          stale = True
-          try:
-              with open("latest.json", encoding="utf-8") as f:
-                  data = json.load(f)
-              ts = datetime.fromisoformat(data["fetched_at"].replace("Z", "+00:00"))
-              age = (datetime.now(timezone.utc) - ts).total_seconds()
-              stale = data.get("ok") is not True or age >= 4500
-              print(f"age_seconds={age:.0f} stale={stale}")
-          except Exception as exc:
-              print(f"freshness check failed: {exc}")
-              stale = True
-
-          with open("/tmp/stale", "w") as f:
-              f.write("true" if stale else "false")
-          PY
-          echo "stale=$(cat /tmp/stale)" >> "$GITHUB_OUTPUT"
-
-      - name: Run regression tests
+      - name: Run regression tests before recovery
         if: steps.freshness.outputs.stale == 'true'
         run: python -m unittest -v test_fetch.py
 
       - name: Recover latest.json
         if: steps.freshness.outputs.stale == 'true'
         run: python fetch.py
+
+      - name: Validate recovered latest.json
+        if: steps.freshness.outputs.stale == 'true'
+        run: python fetch.py --check-latest --max-fetch-age-seconds 120
 
       - name: Commit recovered state
         if: steps.freshness.outputs.stale == 'true'
@@ -80,6 +70,7 @@ jobs:
             if git push; then
               exit 0
             fi
+            echo "push failed; retry ${attempt}/3"
             git pull --rebase origin main
             sleep $((attempt * 2))
           done
