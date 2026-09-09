@@ -5,7 +5,7 @@ GitHub Actions monitor for Trendonify's **Nasdaq 100 Forward PE Ratio**.
 ## Production architecture
 
 - Main workflow runs every 10 minutes at UTC minutes `3,13,23,33,43,53`.
-- An independent watchdog runs at UTC minutes `8,38` and recovers only when the committed state fails strict health validation or its `fetched_at` is 75+ minutes old.
+- An independent watchdog runs at UTC minutes `8,28,48` and recovers only when the committed state fails strict health validation or its `fetched_at` is 60+ minutes old.
 - Main and watchdog share the same GitHub Actions concurrency group with `queue: max`, so overlapping runs are serialized instead of cancelling one another.
 - The tracked Trendonify identity is fixed to the dedicated Nasdaq 100 Forward PE Ratio page:
   `https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio`
@@ -32,7 +32,7 @@ The producer rejects, among other cases:
 - percentile outside `0..100`
 - data dates more than one day in the future or more than seven calendar days old
 - data-date rollback versus the previous known-good state
-- implausible same-date or short-window jumps that are more consistent with parsing/index corruption than a genuine update
+- only extreme same-date/short-window jumps that strongly suggest a wrong metric or corrupted result; genuine large market moves remain allowed
 - malformed, stale, or future `fetched_at`
 - schema/source/source URL/source-kind/fetch-method mismatches
 
@@ -55,7 +55,7 @@ Consumers should require:
 - `source_kind == "dedicated-forward-pe-search-index"`
 - `fetch_method == "duckduckgo-lite"`
 
-For the ChatGPT consumer, a roughly 90-minute `fetched_at` tolerance is appropriate because GitHub scheduled workflows are best-effort and the independent watchdog uses a 75-minute recovery threshold.
+For the ChatGPT consumer, a roughly 90-minute `fetched_at` tolerance is appropriate because GitHub scheduled workflows are best-effort and the independent watchdog starts recovery once committed freshness exceeds 60 minutes.
 
 ## Tested failure behavior
 
