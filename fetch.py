@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
@@ -21,6 +22,12 @@ LATEST = ROOT / "latest.json"
 CANONICAL = "https://trendonify.com/forward-pe-ratio"
 MAIN = "https://trendonify.com/united-states/stock-market/nasdaq-100"
 DEDICATED = "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
+SEARCH_QUERY = 'Trendonify "Nasdaq 100" "Forward P/E Ratio" "Percentile Rank (10Y)"'
+SEARCH_URLS = [
+    ("bing", "https://www.bing.com/search?q=" + quote_plus(SEARCH_QUERY) + "&count=10"),
+    ("google", "https://www.google.com/search?q=" + quote_plus(SEARCH_QUERY) + "&num=10&hl=en"),
+    ("duckduckgo", "https://html.duckduckgo.com/html/?q=" + quote_plus(SEARCH_QUERY)),
+]
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36",
@@ -59,17 +66,25 @@ def clean(html: str) -> str:
     return " ".join(BeautifulSoup(html, "html.parser").stripped_strings)
 
 
-def parse_table(html: str, method: str) -> Candidate:
+def parse_table(html: str, method: str, kind: str = "forward-pe-ratio-table") -> Candidate:
     soup = BeautifulSoup(html, "html.parser")
     for tr in soup.find_all("tr"):
         cells = [" ".join(x.stripped_strings) for x in tr.find_all(["th", "td"])]
         if cells and cells[0].strip().lower() == "nasdaq 100" and len(cells) >= 5:
-            return Candidate(num(cells[1]), num(cells[2]), parse_date(cells[4]).isoformat(), CANONICAL, "forward-pe-ratio-table", method)
+            return Candidate(num(cells[1]), num(cells[2]), parse_date(cells[4]).isoformat(), CANONICAL, kind, method)
+
     text = clean(html)
-    m = re.search(r"Nasdaq\s+100\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)%\s+(?:Attractive|Undervalued|Fair\s+Value|Overvalued|Expensive)\s+((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},\s+\d{4})", text, re.I)
+    # Flexible enough for search snippets with punctuation/separators between fields.
+    m = re.search(
+        r"Nasdaq\s+100.{0,100}?(\d{1,2}(?:\.\d+)?).{0,100}?(\d{1,3}(?:\.\d+)?)\s*%.{0,120}?"
+        r"(?:Attractive|Undervalued|Fair\s+Value|Overvalued|Expensive).{0,120}?"
+        r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},\s+\d{4})",
+        text,
+        re.I,
+    )
     if not m:
         raise ValueError("Nasdaq 100 table row not found")
-    return Candidate(float(m.group(1)), float(m.group(2)), parse_date(m.group(3)).isoformat(), CANONICAL, "forward-pe-ratio-table-text", method)
+    return Candidate(float(m.group(1)), float(m.group(2)), parse_date(m.group(3)).isoformat(), CANONICAL, kind + "-text", method)
 
 
 def parse_page(html: str, method: str, url: str, kind: str) -> Candidate:
@@ -99,27 +114,32 @@ def validate(c: Candidate, previous_date=None):
         raise ValueError("data date rollback")
 
 
-def fetch_html(url: str):
+def fetch_html(url: str, attempts: int = 2, stop_on_403: bool = False):
     errors = []
-    for attempt in range(1, 4):
+    for attempt in range(1, attempts + 1):
         if curl_requests is not None:
             try:
-                r = curl_requests.get(url, headers=HEADERS, impersonate="chrome", timeout=25, allow_redirects=True)
+                r = curl_requests.get(url, headers=HEADERS, impersonate="chrome", timeout=20, allow_redirects=True)
                 if r.status_code == 200 and len(r.text) > 300:
                     return r.text, f"curl-cffi-attempt-{attempt}"
                 errors.append(f"curl:{r.status_code}")
+                if stop_on_403 and r.status_code == 403:
+                    break
             except Exception as e:
                 errors.append(f"curl:{e}")
         try:
             req = Request(url, headers=HEADERS)
-            with urlopen(req, timeout=25) as r:
+            with urlopen(req, timeout=20) as r:
                 text = r.read().decode("utf-8", "replace")
             if len(text) > 300:
                 return text, f"urllib-attempt-{attempt}"
         except Exception as e:
             errors.append(f"urllib:{e}")
-        time.sleep(attempt * 2)
-    raise RuntimeError("; ".join(errors[-8:]))
+            if stop_on_403 and "403" in str(e):
+                break
+        if attempt < attempts:
+            time.sleep(attempt * 2)
+    raise RuntimeError("; ".join(errors[-6:]))
 
 
 def load_previous():
@@ -137,22 +157,41 @@ def acquire(previous):
         except Exception:
             pass
 
-    # Canonical table is authoritative. Fallback pages are consulted only if it fails,
-    # so same-day discrepancies across Trendonify pages cannot create false conflicts.
-    sources = [
-        (CANONICAL, lambda h, m: parse_table(h, m)),
-        (MAIN, lambda h, m: parse_page(h, m, MAIN, "nasdaq-100-main-page")),
-        (DEDICATED, lambda h, m: parse_page(h, m, DEDICATED, "dedicated-forward-pe-page")),
-    ]
     errors = []
-    for url, parser in sources:
+
+    # 1) Canonical Trendonify table direct. A 403 is expected on some datacenter IPs,
+    # so do not waste retries on it.
+    try:
+        html, method = fetch_html(CANONICAL, attempts=1, stop_on_403=True)
+        c = parse_table(html, method)
+        validate(c, previous_date)
+        return c
+    except Exception as e:
+        errors.append(f"canonical-direct: {type(e).__name__}: {e}")
+
+    # 2) Search-index transport for the same Trendonify canonical row.
+    # Search engines are transport only; the accepted data must parse as the Trendonify
+    # Nasdaq 100 forward-P/E row and still passes the same validation.
+    for engine, url in SEARCH_URLS:
         try:
-            html, method = fetch_html(url)
-            c = parser(html, method)
+            html, method = fetch_html(url, attempts=2)
+            c = parse_table(html, f"{engine}-search-index/{method}", kind=f"search-index-{engine}")
             validate(c, previous_date)
             return c
         except Exception as e:
-            errors.append(f"{url}: {type(e).__name__}: {e}")
+            errors.append(f"search-{engine}: {type(e).__name__}: {e}")
+
+    # 3) Last-resort Trendonify fallback pages. They are never compared against a valid
+    # canonical reading, preventing same-day cross-page discrepancies from causing noise.
+    for url, kind in ((MAIN, "nasdaq-100-main-page"), (DEDICATED, "dedicated-forward-pe-page")):
+        try:
+            html, method = fetch_html(url, attempts=1, stop_on_403=True)
+            c = parse_page(html, method, url, kind)
+            validate(c, previous_date)
+            return c
+        except Exception as e:
+            errors.append(f"{kind}: {type(e).__name__}: {e}")
+
     raise RuntimeError(" | ".join(errors))
 
 
@@ -178,7 +217,6 @@ def main():
         print(json.dumps(payload))
         return 0
     except Exception as e:
-        # Keep last-known-good latest.json untouched on failure.
         print(f"ERROR: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
