@@ -19,6 +19,12 @@ class ParserTests(unittest.TestCase):
         c = parse_table('<div>Nasdaq 100 20.78 24.2% Undervalued Sep 8, 2026</div>', 'test')
         self.assertEqual((c.forward_pe, c.percentile_10y), (20.78, 24.2))
 
+    def test_search_index_snippet(self):
+        html = '<div>Forward PE Ratio — Nasdaq 100 | 20.78 | 24.2% | Undervalued | Sep 8, 2026</div>'
+        c = parse_table(html, 'bing-search-index/test', 'search-index-bing')
+        self.assertEqual((c.forward_pe, c.percentile_10y, c.data_date), (20.78, 24.2, '2026-09-08'))
+        self.assertTrue(c.source_kind.startswith('search-index-bing'))
+
     def test_main_page(self):
         html = '''
         <p>The Nasdaq 100 currently trades at a forward P/E ratio of 20.7 as of September 08, 2026.</p>
