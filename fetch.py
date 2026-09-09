@@ -22,6 +22,7 @@ LATEST = ROOT / "latest.json"
 CANONICAL = "https://trendonify.com/forward-pe-ratio"
 MAIN = "https://trendonify.com/united-states/stock-market/nasdaq-100"
 DEDICATED = "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
+JINA_PREFIX = "https://r.jina.ai/"
 SEARCH_QUERY = 'Trendonify "Nasdaq 100" "Forward P/E Ratio" "Percentile Rank (10Y)"'
 SEARCH_URLS = [
     ("bing", "https://www.bing.com/search?q=" + quote_plus(SEARCH_QUERY) + "&count=10"),
@@ -74,7 +75,6 @@ def parse_table(html: str, method: str, kind: str = "forward-pe-ratio-table") ->
             return Candidate(num(cells[1]), num(cells[2]), parse_date(cells[4]).isoformat(), CANONICAL, kind, method)
 
     text = clean(html)
-    # Flexible enough for search snippets with punctuation/separators between fields.
     m = re.search(
         r"Nasdaq\s+100.{0,100}?(\d{1,2}(?:\.\d+)?).{0,100}?(\d{1,3}(?:\.\d+)?)\s*%.{0,120}?"
         r"(?:Attractive|Undervalued|Fair\s+Value|Overvalued|Expensive).{0,120}?"
@@ -119,8 +119,8 @@ def fetch_html(url: str, attempts: int = 2, stop_on_403: bool = False):
     for attempt in range(1, attempts + 1):
         if curl_requests is not None:
             try:
-                r = curl_requests.get(url, headers=HEADERS, impersonate="chrome", timeout=20, allow_redirects=True)
-                if r.status_code == 200 and len(r.text) > 300:
+                r = curl_requests.get(url, headers=HEADERS, impersonate="chrome", timeout=25, allow_redirects=True)
+                if r.status_code == 200 and len(r.text) > 200:
                     return r.text, f"curl-cffi-attempt-{attempt}"
                 errors.append(f"curl:{r.status_code}")
                 if stop_on_403 and r.status_code == 403:
@@ -129,9 +129,9 @@ def fetch_html(url: str, attempts: int = 2, stop_on_403: bool = False):
                 errors.append(f"curl:{e}")
         try:
             req = Request(url, headers=HEADERS)
-            with urlopen(req, timeout=20) as r:
+            with urlopen(req, timeout=25) as r:
                 text = r.read().decode("utf-8", "replace")
-            if len(text) > 300:
+            if len(text) > 200:
                 return text, f"urllib-attempt-{attempt}"
         except Exception as e:
             errors.append(f"urllib:{e}")
@@ -159,8 +159,7 @@ def acquire(previous):
 
     errors = []
 
-    # 1) Canonical Trendonify table direct. A 403 is expected on some datacenter IPs,
-    # so do not waste retries on it.
+    # 1) Direct canonical page. GitHub-hosted runners often receive 403, so fail fast.
     try:
         html, method = fetch_html(CANONICAL, attempts=1, stop_on_403=True)
         c = parse_table(html, method)
@@ -169,28 +168,43 @@ def acquire(previous):
     except Exception as e:
         errors.append(f"canonical-direct: {type(e).__name__}: {e}")
 
-    # 2) Search-index transport for the same Trendonify canonical row.
-    # Search engines are transport only; the accepted data must parse as the Trendonify
-    # Nasdaq 100 forward-P/E row and still passes the same validation.
+    # 2) Jina Reader is transport only: it fetches and renders the same Trendonify URL.
+    # The accepted fields still must parse from Trendonify's canonical Nasdaq 100 row.
+    try:
+        html, method = fetch_html(JINA_PREFIX + CANONICAL, attempts=2)
+        c = parse_table(html, f"jina-reader/{method}", kind="forward-pe-ratio-table-jina")
+        validate(c, previous_date)
+        return c
+    except Exception as e:
+        errors.append(f"jina-canonical: {type(e).__name__}: {e}")
+
+    # 3) Search-index transport for the exact same Trendonify row.
     for engine, url in SEARCH_URLS:
         try:
-            html, method = fetch_html(url, attempts=2)
+            html, method = fetch_html(url, attempts=1)
             c = parse_table(html, f"{engine}-search-index/{method}", kind=f"search-index-{engine}")
             validate(c, previous_date)
             return c
         except Exception as e:
             errors.append(f"search-{engine}: {type(e).__name__}: {e}")
 
-    # 3) Last-resort Trendonify fallback pages. They are never compared against a valid
-    # canonical reading, preventing same-day cross-page discrepancies from causing noise.
+    # 4) Last-resort fallback pages, first through Jina then direct. They are consulted
+    # only if the canonical row cannot be obtained, preventing cross-page disagreement noise.
     for url, kind in ((MAIN, "nasdaq-100-main-page"), (DEDICATED, "dedicated-forward-pe-page")):
+        try:
+            html, method = fetch_html(JINA_PREFIX + url, attempts=1)
+            c = parse_page(html, f"jina-reader/{method}", url, kind + "-jina")
+            validate(c, previous_date)
+            return c
+        except Exception as e:
+            errors.append(f"{kind}-jina: {type(e).__name__}: {e}")
         try:
             html, method = fetch_html(url, attempts=1, stop_on_403=True)
             c = parse_page(html, method, url, kind)
             validate(c, previous_date)
             return c
         except Exception as e:
-            errors.append(f"{kind}: {type(e).__name__}: {e}")
+            errors.append(f"{kind}-direct: {type(e).__name__}: {e}")
 
     raise RuntimeError(" | ".join(errors))
 
@@ -217,6 +231,7 @@ def main():
         print(json.dumps(payload))
         return 0
     except Exception as e:
+        # Preserve last-known-good latest.json on failure.
         print(f"ERROR: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
