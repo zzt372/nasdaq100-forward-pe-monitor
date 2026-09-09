@@ -1,0 +1,35 @@
+name: Probe Nasdaq source transports
+
+on:
+  push:
+    paths:
+      - ".github/workflows/probe.yml"
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe Jina and Bing RSS
+        shell: bash
+        run: |
+          python - <<'PY'
+          import urllib.request, urllib.parse
+          urls = {
+            'jina': 'https://r.jina.ai/https://trendonify.com/forward-pe-ratio',
+            'jina-http': 'https://r.jina.ai/http://trendonify.com/forward-pe-ratio',
+            'bing-rss': 'https://www.bing.com/search?format=rss&q=' + urllib.parse.quote_plus('site:trendonify.com/forward-pe-ratio "Nasdaq 100" "Percentile Rank (10Y)" "Last Update"'),
+            'translate': 'https://translate.google.com/translate?sl=auto&tl=en&u=https://trendonify.com/forward-pe-ratio',
+          }
+          for name, url in urls.items():
+              print('\n===== '+name+' =====')
+              try:
+                  req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0','Accept-Language':'en-US,en;q=0.9'})
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      data=r.read().decode('utf-8','replace')
+                      print('status', r.status, 'final', r.url, 'len', len(data))
+                      print(data[:5000].replace('::','--'))
+              except Exception as e:
+                  print(type(e).__name__, e)
+          PY
