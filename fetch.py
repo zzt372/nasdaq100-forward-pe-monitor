@@ -78,7 +78,7 @@ def parse_search_index(raw: str):
         raise RuntimeError("DuckDuckGo bot challenge")
 
     marker = "Nasdaq 100 Forward PE Ratio - trendonify.com"
-    positions = [m.start() for m in re.finditer(re.escape(marker), text)]
+    positions = [m.start() for m in re.finditer(re.escape(marker), text, flags=re.I)]
     if not positions:
         raise ValueError("Trendonify dedicated result not found")
 
@@ -87,7 +87,7 @@ def parse_search_index(raw: str):
 
     for pos in positions:
         block = text[pos : pos + 3500]
-        if exact_url not in block:
+        if exact_url not in block.lower():
             continue
 
         valuation = re.search(
@@ -164,8 +164,9 @@ def validate_transition(forward_pe, percentile, data_date, previous):
     percentile_change = abs(float(percentile) - old_pct)
     day_gap = (new_date - old_date).days
 
-    # Fail closed on implausible parser/index jumps. A later fresh runner can retry.
-    if day_gap == 0 and (relative_pe_change > 0.05 or percentile_change > 20):
+    # Only block extreme jumps that strongly suggest a wrong metric/result. Keep the
+    # guard loose enough that a genuine market crash/rally can still trigger alerts.
+    if day_gap == 0 and (relative_pe_change > 0.25 or percentile_change > 45):
         raise ValueError("implausible same-date value jump")
     if 0 < day_gap <= 7 and (relative_pe_change > 0.50 or percentile_change > 60):
         raise ValueError("implausible short-window value jump")
@@ -275,7 +276,7 @@ def run_fetch():
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-latest", action="store_true")
-    parser.add_argument("--max-fetch-age-seconds", type=int, default=4500)
+    parser.add_argument("--max-fetch-age-seconds", type=int, default=3600)
     args = parser.parse_args(argv)
 
     try:
