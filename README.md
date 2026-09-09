@@ -1,69 +1,71 @@
 # Nasdaq 100 Forward P/E Monitor
 
-GitHub Actions monitor for Trendonify's **Nasdaq 100 Forward PE Ratio**.
+Trendonify の **Nasdaq 100 Forward PE Ratio** を監視する GitHub Actions リポジトリです。
 
-## Production architecture
+## 本番構成
 
-- Main workflow runs every 10 minutes at UTC minutes `3,13,23,33,43,53`.
-- An independent watchdog runs at UTC minutes `8,28,48` and recovers only when the committed state fails strict health validation or its `fetched_at` is 60+ minutes old.
-- Main and watchdog share the same GitHub Actions concurrency group with `queue: max`, so overlapping runs are serialized instead of cancelling one another.
-- The tracked Trendonify identity is fixed to the dedicated Nasdaq 100 Forward PE Ratio page:
+- メインワークフローは UTC の `3,13,23,33,43,53` 分、つまり約10分ごとに実行します。
+- 独立した Watchdog は UTC の `8,28,48` 分に実行し、commit 済み状態が厳格な健全性検証に失敗した場合、または `fetched_at` が60分以上古い場合だけ復旧処理を行います。
+- メインと Watchdog は同じ GitHub Actions concurrency group を `queue: max` で共有し、重複実行時はキャンセルではなく直列化します。
+- 追跡対象の Trendonify 系列は、次の Nasdaq 100 Forward PE Ratio 専用ページに固定しています。
   `https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio`
-- Trendonify blocks GitHub-hosted runner IPs with HTTP 403/Cloudflare. The monitor therefore reads the **public search-index result for that exact Trendonify page** through DuckDuckGo Lite. DuckDuckGo is transport only; values from other domains are never accepted.
-- Exactly one search request is made per production run. Repeated search queries from one runner are intentionally avoided because they increase bot-challenge risk.
-- A valid result must provide **forward P/E + 10-year percentile + indexed data date together in the same exact Trendonify result block**. Values from different Trendonify pages or different search results are never merged.
-- Identical duplicate result blocks are allowed. Conflicting duplicate tuples fail closed.
-- Acquisition, parsing, source-identity, freshness, or sanity-check failures leave the last-known-good `latest.json` untouched.
-- Regression tests run before each production fetch. The generated payload is validated again before any commit.
-- Material value/date/source changes are committed immediately. When values do not change, a heartbeat is committed after roughly 40 minutes so downstream consumers can verify freshness without creating a commit every 10 minutes.
-- GitHub Actions `checkout` and `setup-python` use the current v7 major releases.
-- No API keys or repository secrets are required.
+- Trendonify は GitHub-hosted runner のIPを HTTP 403 / Cloudflare で拒否することがあるため、実値は DuckDuckGo Lite 経由で **上記の専用Trendonifyページそのものの公開検索インデックス結果** を読み取ります。DuckDuckGo はあくまで転送経路であり、他ドメインの値は採用しません。
+- 本番1回の実行につき検索リクエストは1回だけです。同一runnerから検索を連打するとbot challengeの確率が上がるため、意図的に再検索を行いません。
+- 正常値として採用するには、**Forward P/E・10年パーセンタイル・インデックス上の日付** の3項目が、同じTrendonify結果ブロック内に揃っている必要があります。別のTrendonifyページや別の検索結果から値を合成しません。
+- 同一内容の重複結果ブロックは許可しますが、値が矛盾する重複結果はfail closedで拒否します。
+- 取得、解析、source identity、鮮度、sanity checkのいずれかに失敗した場合、last-known-good の `latest.json` は上書きしません。
+- 毎回の本番取得前に回帰テストを実行し、生成したpayloadもcommit前に再検証します。
+- 値・日付・source等に実質的な変化があれば即commitします。値が変わらない場合でも約40分ごとにheartbeat commitを行い、10分ごとに不要なcommitを増やさず、consumer側が鮮度を確認できるようにします。
+- GitHub Actions の `checkout` と `setup-python` は現在の v7 系を使用しています。
+- APIキーやRepository Secretsは不要です。
 
-## Validation and fail-closed rules
+## 検証・fail-closedルール
 
-The producer rejects, among other cases:
+producer側では、少なくとも以下を拒否します。
 
-- malformed or missing Trendonify result blocks
-- DuckDuckGo bot/CAPTCHA challenge pages
-- another provider masquerading as a matching result
-- a wrong Trendonify URL
-- conflicting duplicate Trendonify tuples
-- P/E outside `1..100`
-- percentile outside `0..100`
-- data dates more than one day in the future or more than seven calendar days old
-- data-date rollback versus the previous known-good state
-- only extreme same-date/short-window jumps that strongly suggest a wrong metric or corrupted result; genuine large market moves remain allowed
-- malformed, stale, or future `fetched_at`
-- schema/source/source URL/source-kind/fetch-method mismatches
+- Trendonify結果ブロックの欠落・破損
+- DuckDuckGoのbot / CAPTCHA challengeページ
+- 他プロバイダを誤って一致結果として扱うケース
+- 対象とは異なるTrendonify URL
+- 同一ページについて矛盾する複数tupleが返るケース
+- P/E が `1..100` の範囲外
+- 10年パーセンタイルが `0..100` の範囲外
+- data date が1日超未来、または7暦日超古い
+- 前回の正常値より古い data date への巻き戻り
+- 誤った指標や壊れた検索結果を強く疑う極端な同日・短時間ジャンプのみ拒否します。実際の大きな相場変動は許可します。
+- `fetched_at` の形式不正、鮮度切れ、不自然な未来時刻
+- schema / source / source URL / source kind / fetch method の不一致
 
-## Why one Trendonify representation is used
+## Trendonifyの表現を1つに固定する理由
 
-Trendonify can expose slightly different values on its aggregate forward-P/E table, Nasdaq 100 overview, and dedicated Forward P/E page/search index at the same time. Mixing those representations creates false conflicts and noisy alerts. This repository deliberately tracks one fixed identity and one complete tuple from one result block. A different Trendonify representation is never used as a silent substitute.
+Trendonifyでは、Forward P/E一覧、Nasdaq 100概要ページ、Forward P/E専用ページ・検索インデックスで、同じ時点でも数値がわずかに異なる場合があります。
 
-## `latest.json` consumer validation
+これらを混ぜて比較すると、本当は正常でも「矛盾」と判定して誤った障害扱いやノイズ通知につながります。そのため、このリポジトリでは **1つの固定した系列 identity と、1つの結果ブロック内に揃った完全なtupleだけ** を追跡します。別のTrendonify表現を暗黙fallbackとして使うことはありません。
 
-Consumers should require:
+## `latest.json` を読む側の推奨検証
+
+consumer側では以下を確認してください。
 
 - `schema_version == 2`
 - `ok == true`
-- `forward_pe` is numeric and between `1` and `100`
-- `percentile_10y` is numeric and between `0` and `100`
-- `data_date` is plausible, recent, and has not rolled backward
-- `fetched_at` is timezone-aware, not materially in the future, and fresh enough for the consumer's SLA
+- `forward_pe` が数値で `1..100`
+- `percentile_10y` が数値で `0..100`
+- `data_date` が妥当かつ十分新しく、前回正常値より巻き戻っていない
+- `fetched_at` がtimezone付きで、不自然な未来ではなく、consumer側SLAに対して十分新しい
 - `source == "Trendonify"`
 - `source_url == "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"`
 - `source_kind == "dedicated-forward-pe-search-index"`
 - `fetch_method == "duckduckgo-lite"`
 
-For the ChatGPT consumer, a roughly 90-minute `fetched_at` tolerance is appropriate because GitHub scheduled workflows are best-effort and the independent watchdog starts recovery once committed freshness exceeds 60 minutes.
+ChatGPT側のconsumerでは `fetched_at` を約90分まで許容します。GitHubのscheduled workflowはbest-effortであり、一方で独立Watchdogはcommit済みデータが60分を超えて古くなった時点から復旧を開始するためです。
 
-## Tested failure behavior
+## 実施済みの障害系テスト
 
-Integration tests use multiple fresh GitHub-hosted runners to verify:
+複数の新しい GitHub-hosted runner を使った統合テストで、次を確認しています。
 
-1. repeated live acquisition of the same Trendonify tuple,
-2. stale-state classification,
-3. recovery fetch and post-fetch validation, and
-4. preservation of the byte-for-byte last-known-good `latest.json` after a simulated acquisition/CAPTCHA failure.
+1. 同一Trendonify tupleを複数runnerから繰り返し正常取得できること
+2. stale状態を正しく判定できること
+3. recovery取得後に再検証まで正常完了すること
+4. 疑似的な取得失敗 / CAPTCHA失敗を発生させても、last-known-good の `latest.json` がバイト単位で保持されること
 
-The design favors **silence and preservation of a known-good value over publishing a guessed, partial, cross-page, or cross-source value**.
+この設計では、**推測値・不完全値・別ページ混在値・別ソース値を公開するより、既知の正常値を保持して静かに失敗すること** を優先します。
