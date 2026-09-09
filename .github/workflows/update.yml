@@ -9,7 +9,7 @@ on:
       - ".github/workflows/update.yml"
   workflow_dispatch:
   schedule:
-    # Avoid minute 0, when scheduled Actions are commonly congested.
+    # Offset from minute 0 to reduce scheduler congestion.
     - cron: "2-57/5 * * * *"
 
 permissions:
@@ -22,7 +22,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v4
@@ -33,13 +33,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: python -m pip install --disable-pip-version-check beautifulsoup4 curl-cffi
-
       - name: Run regression tests
         run: python -m unittest -v test_fetch.py
 
-      - name: Fetch and validate Trendonify
+      - name: Fetch and validate Trendonify search index
         run: python fetch.py
 
       - name: Decide whether a commit is needed
@@ -61,7 +58,7 @@ jobs:
               old = {}
 
           keys = ("schema_version", "ok", "forward_pe", "percentile_10y",
-                  "data_date", "source", "source_url", "source_kind")
+                  "data_date", "source", "source_url", "source_kind", "fetch_method")
           material = any(old.get(k) != new.get(k) for k in keys)
           heartbeat = False
           if not material:
