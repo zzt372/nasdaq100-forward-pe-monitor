@@ -1,0 +1,12 @@
+{
+  "schema_version": 2,
+  "ok": false,
+  "forward_pe": null,
+  "percentile_10y": null,
+  "data_date": null,
+  "fetched_at": null,
+  "source": "Trendonify",
+  "source_url": null,
+  "source_kind": "uninitialized",
+  "fetch_method": null
+}
