@@ -14,34 +14,34 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        provider: [duckduckgo-lite, yahoo, bing, startpage]
+        case: [dedicated, canonical-table, canonical-values, canonical-update, canonical-url]
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Probe ${{ matrix.provider }} on isolated runner
+      - name: Probe DuckDuckGo query ${{ matrix.case }} on isolated runner
         env:
-          PROVIDER: ${{ matrix.provider }}
+          CASE: ${{ matrix.case }}
         shell: bash
         run: |
           python - <<'PY'
           import html as htmlmod
           import os
           import re
-          import sys
           import urllib.parse
           import urllib.request
 
-          provider = os.environ['PROVIDER']
-          query = 'Trendonify "Nasdaq 100 Forward PE Ratio" "percentile"'
-          q = urllib.parse.quote_plus(query)
-          urls = {
-              'duckduckgo-lite': 'https://lite.duckduckgo.com/lite/?q=' + q,
-              'yahoo': 'https://search.yahoo.com/search?p=' + q,
-              'bing': 'https://www.bing.com/search?count=10&q=' + q,
-              'startpage': 'https://www.startpage.com/sp/search?query=' + q,
+          case = os.environ['CASE']
+          queries = {
+              'dedicated': 'Trendonify "Nasdaq 100 Forward PE Ratio" "percentile"',
+              'canonical-table': 'Trendonify "Forward PE Ratio" "Nasdaq 100" "Percentile Rank (10Y)"',
+              'canonical-values': 'Trendonify "Nasdaq 100" "20.78" "24.2%" "Sep 8, 2026"',
+              'canonical-update': 'Trendonify "Nasdaq 100" "Forward P/E Ratio" "Last Update"',
+              'canonical-url': '"trendonify.com/forward-pe-ratio" "Nasdaq 100" "24.2%"',
           }
+          query = queries[case]
+          url = 'https://lite.duckduckgo.com/lite/?q=' + urllib.parse.quote_plus(query)
           req = urllib.request.Request(
-              urls[provider],
+              url,
               headers={
                   'User-Agent': 'Mozilla/5.0',
                   'Accept-Language': 'en-US,en;q=0.9',
@@ -61,33 +61,19 @@ jobs:
           text = re.sub(r'<[^>]+>', ' ', text)
           text = ' '.join(htmlmod.unescape(text).split())
           low = text.lower()
-
           if 'select all squares containing a duck' in low or 'bots use duckduckgo too' in low:
               print('BOT_CHALLENGE')
               raise SystemExit(3)
 
-          marker = 'Nasdaq 100 Forward PE Ratio - trendonify.com'
-          pos = text.find(marker)
-          if pos < 0:
-              print('DEDICATED_RESULT_MISSING')
-              print(text[:5000])
+          print('QUERY', query)
+          print('TEXT', text[:14000])
+
+          canonical_pos = text.find('Forward PE Ratio - trendonify.com')
+          dedicated_pos = text.find('Nasdaq 100 Forward PE Ratio - trendonify.com')
+          print('POSITIONS', canonical_pos, dedicated_pos)
+
+          # Probe succeeds if any Trendonify result is returned; logs are inspected to
+          # determine whether a stable canonical row can be parsed.
+          if 'trendonify.com' not in low:
               raise SystemExit(4)
-
-          block = text[pos:pos+3500]
-          valuation = re.search(
-              r'current\s+P/E\s+Ratio\s+of\s+(\d+(?:\.\d+)?)\s+ranks\s+in\s+the\s+'
-              r'(\d+(?:\.\d+)?)(?:st|nd|rd|th)?\s+percentile',
-              block, re.I,
-          )
-          date_match = re.search(
-              r'trendonify\.com/united-states/stock-market/nasdaq-100/forward-pe-ratio\s+'
-              r'(20\d{2}-\d{2}-\d{2})T',
-              block, re.I,
-          )
-          print('BLOCK', block[:3500])
-          if not valuation or not date_match:
-              print('FIELDS_MISSING', bool(valuation), bool(date_match))
-              raise SystemExit(5)
-
-          print('PARSED', valuation.group(1), valuation.group(2), date_match.group(1))
           PY
