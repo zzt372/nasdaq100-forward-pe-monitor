@@ -1,23 +1,22 @@
 # Nasdaq 100 Forward P/E Monitor
 
-GitHub Actions monitor for Trendonify's **Nasdaq 100 Forward P/E Ratio**.
+GitHub Actions monitor for Trendonify's **Nasdaq 100 Forward PE Ratio**.
 
-## Design
+## Production architecture
 
-- Runs every 5 minutes, offset from minute `0`.
-- Canonical source: Trendonify `/forward-pe-ratio` → **Nasdaq 100** row.
-- Fallback pages are used only when the canonical source cannot be fetched or parsed:
-  1. Nasdaq 100 main page
-  2. Dedicated Nasdaq 100 Forward P/E page
-- A valid canonical reading always wins, so same-day differences on fallback pages do not create false conflicts.
-- Validates forward P/E, 10-year percentile, and data date.
-- Rejects future/stale dates and date rollback.
-- Preserves last-known-good `latest.json` if acquisition fails.
-- Uses browser-like TLS/headers via `curl-cffi`, with `urllib` fallback.
-- Commits immediately on material value changes and roughly hourly as a freshness heartbeat.
-- Regression tests run before each fetch.
+- Main workflow runs every 5 minutes, offset from minute `0`.
+- An independent watchdog runs at minutes `7,22,37,52` and refreshes only when committed data is stale.
+- The authoritative Trendonify page is the dedicated Nasdaq 100 Forward PE Ratio page:
+  `https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio`
+- Trendonify blocks GitHub-hosted runner IPs with HTTP 403/Cloudflare. The monitor therefore reads the **public search-index snippet for that exact Trendonify page** through DuckDuckGo Lite. DuckDuckGo is transport only; values from other domains are never accepted.
+- One query must contain all three required fields from the same Trendonify result: forward P/E, 10-year percentile, and indexed data date.
+- Only one search request is made per run to reduce bot-challenge risk. A failed run leaves the last-known-good `latest.json` untouched; the next 5-minute run naturally retries from a fresh runner.
+- Regression tests run before each production fetch.
+- Values and dates are validated; future/stale dates and date rollback are rejected.
+- Material value changes are committed immediately. When values do not change, a freshness heartbeat is committed roughly hourly.
+- No API keys or repository secrets are required.
 
-## Consumer validation
+## `latest.json` consumer validation
 
 Consumers should require:
 
@@ -28,6 +27,8 @@ Consumers should require:
 - `data_date` is plausible and recent
 - `fetched_at` is fresh
 - `source == "Trendonify"`
-- `source_url` is a Trendonify URL
+- `source_url == "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"`
+- `source_kind == "dedicated-forward-pe-search-index"`
+- `fetch_method == "duckduckgo-lite"`
 
-No API keys or secrets are stored in this repository.
+This repository deliberately preserves the last-known-good value when acquisition or validation fails instead of publishing guessed, partial, or cross-source data.
