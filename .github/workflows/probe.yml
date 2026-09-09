@@ -11,44 +11,41 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probe search transports
+      - name: Inspect Bing result blocks
         shell: bash
         run: |
           python - <<'PY'
-          import urllib.request, urllib.parse
+          import urllib.request, urllib.parse, re
+          from html.parser import HTMLParser
 
-          queries = [
-            'Trendonify Forward PE Ratio Nasdaq 100',
-            '"Forward PE Ratio" "Nasdaq 100" Trendonify',
-            'trendonify.com/forward-pe-ratio Nasdaq 100',
-            '"Nasdaq 100" "Percentile Rank (10Y)" Trendonify',
-            '"Nasdaq 100" "Last Update" Trendonify',
-          ]
-          urls = {}
-          for i,q in enumerate(queries,1):
-              urls[f'bing-rss-{i}'] = 'https://www.bing.com/search?format=rss&q=' + urllib.parse.quote_plus(q)
-              urls[f'bing-html-{i}'] = 'https://www.bing.com/search?count=10&q=' + urllib.parse.quote_plus(q)
-              urls[f'google-html-{i}'] = 'https://www.google.com/search?num=10&hl=en&q=' + urllib.parse.quote_plus(q)
+          q='Trendonify Forward PE Ratio Nasdaq 100'
+          url='https://www.bing.com/search?count=20&q=' + urllib.parse.quote_plus(q)
+          req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0','Accept-Language':'en-US,en;q=0.9'})
+          with urllib.request.urlopen(req, timeout=20) as r:
+              data=r.read().decode('utf-8','replace')
+          print('len',len(data),'24.2',data.count('24.2'),'20.78',data.count('20.78'),'20.77',data.count('20.77'),'20.75',data.count('20.75'))
+          for needle in ('24.2','20.78','20.77','20.75','Sep 8, 2026','September 8, 2026'):
+              print('\n===== around',needle,'=====')
+              start=0
+              n=0
+              while True:
+                  p=data.find(needle,start)
+                  if p<0: break
+                  print(data[max(0,p-1600):p+2600].replace('::','--'))
+                  start=p+len(needle)
+                  n+=1
+                  if n>=4: break
 
-          for name, url in urls.items():
-              print('\n===== '+name+' =====')
-              try:
-                  req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0','Accept-Language':'en-US,en;q=0.9'})
-                  with urllib.request.urlopen(req, timeout=20) as r:
-                      data=r.read().decode('utf-8','replace')
-                      low=data.lower()
-                      print('status', r.status, 'len', len(data), 'has_trendonify', 'trendonify' in low, 'has_24.2', '24.2' in data, 'has_20.78', '20.78' in data)
-                      # Print only text around Trendonify hits to keep logs compact.
-                      positions=[]
-                      start=0
-                      while True:
-                          p=low.find('trendonify', start)
-                          if p < 0: break
-                          positions.append(p)
-                          start=p+1
-                          if len(positions)>=5: break
-                      for p in positions:
-                          print(data[max(0,p-500):p+1800].replace('::','--'))
-              except Exception as e:
-                  print(type(e).__name__, e)
+          # Roughly isolate Bing algorithmic result list items.
+          for m in re.finditer(r'<li class="b_algo"[\s\S]*?</li>', data, re.I):
+              block=m.group(0)
+              txt=re.sub(r'<[^>]+>',' ',block)
+              txt=re.sub(r'&[^;]+;',' ',txt)
+              txt=' '.join(txt.split())
+              low=txt.lower()
+              if 'trendonify' in low or '24.2' in txt or 'forward pe' in low:
+                  print('\n===== B_ALGO =====')
+                  print(txt[:5000])
+                  hrefs=re.findall(r'href="([^"]+)"',block)
+                  print('hrefs',hrefs[:5])
           PY
