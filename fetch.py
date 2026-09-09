@@ -1,146 +1,92 @@
 #!/usr/bin/env python3
+import html as htmlmod
 import json
 import math
 import re
 import sys
-import time
-from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 
-from bs4 import BeautifulSoup
-
-try:
-    from curl_cffi import requests as curl_requests
-except Exception:
-    curl_requests = None
-
 ROOT = Path(__file__).resolve().parent
 LATEST = ROOT / "latest.json"
-CANONICAL = "https://trendonify.com/forward-pe-ratio"
-MAIN = "https://trendonify.com/united-states/stock-market/nasdaq-100"
 DEDICATED = "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
-JINA_PREFIX = "https://r.jina.ai/"
-SEARCH_QUERY = 'site:trendonify.com/forward-pe-ratio "Nasdaq 100" "Percentile Rank (10Y)" "Last Update"'
-SEARCH_URLS = [
-    ("bing-rss", "https://www.bing.com/search?format=rss&q=" + quote_plus(SEARCH_QUERY)),
-    ("bing", "https://www.bing.com/search?q=" + quote_plus(SEARCH_QUERY) + "&count=10"),
-    ("google", "https://www.google.com/search?q=" + quote_plus(SEARCH_QUERY) + "&num=10&hl=en"),
-    ("duckduckgo", "https://html.duckduckgo.com/html/?q=" + quote_plus(SEARCH_QUERY)),
-]
-
+SEARCH_QUERY = 'Trendonify "Nasdaq 100 Forward PE Ratio" "percentile"'
+SEARCH_URL = "https://lite.duckduckgo.com/lite/?q=" + quote_plus(SEARCH_QUERY)
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36",
+    "User-Agent": "Mozilla/5.0",
     "Accept-Language": "en-US,en;q=0.9",
     "Cache-Control": "no-cache",
 }
 
-@dataclass
-class Candidate:
-    forward_pe: float
-    percentile_10y: float
-    data_date: str
-    source_url: str
-    source_kind: str
-    fetch_method: str
-
 
 def parse_date(text: str):
-    text = " ".join(text.replace(",", ", ").split())
-    for fmt in ("%b %d, %Y", "%B %d, %Y", "%Y-%m-%d"):
+    for fmt in ("%Y-%m-%d", "%b %d, %Y", "%B %d, %Y"):
         try:
-            return datetime.strptime(text, fmt).date()
+            return datetime.strptime(text.strip(), fmt).date()
         except ValueError:
             pass
     raise ValueError(f"bad date: {text}")
 
 
-def num(text: str) -> float:
-    m = re.search(r"-?\d+(?:\.\d+)?", text.replace(",", ""))
-    if not m:
-        raise ValueError(f"number not found: {text}")
-    return float(m.group())
+def textify(raw: str) -> str:
+    raw = re.sub(r"<script[\s\S]*?</script>", " ", raw, flags=re.I)
+    raw = re.sub(r"<style[\s\S]*?</style>", " ", raw, flags=re.I)
+    raw = re.sub(r"<[^>]+>", " ", raw)
+    return " ".join(htmlmod.unescape(raw).split())
 
 
-def clean(html: str) -> str:
-    return " ".join(BeautifulSoup(html, "html.parser").stripped_strings)
+def parse_search_index(raw: str):
+    text = textify(raw)
+    low = text.lower()
+    if "unfortunately, bots use duckduckgo too" in low or "select all squares containing a duck" in low:
+        raise RuntimeError("DuckDuckGo bot challenge")
 
+    # Require the exact Trendonify Nasdaq 100 Forward PE result, not another provider.
+    marker = "Nasdaq 100 Forward PE Ratio - trendonify.com"
+    pos = text.find(marker)
+    if pos < 0:
+        raise ValueError("Trendonify dedicated result not found")
+    block = text[pos : pos + 2600]
+    if "trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio" not in block:
+        raise ValueError("dedicated Trendonify URL not present")
 
-def parse_table(html: str, method: str, kind: str = "forward-pe-ratio-table") -> Candidate:
-    soup = BeautifulSoup(html, "html.parser")
-    for tr in soup.find_all("tr"):
-        cells = [" ".join(x.stripped_strings) for x in tr.find_all(["th", "td"])]
-        if cells and cells[0].strip().lower() == "nasdaq 100" and len(cells) >= 5:
-            return Candidate(num(cells[1]), num(cells[2]), parse_date(cells[4]).isoformat(), CANONICAL, kind, method)
-
-    text = clean(html)
-    m = re.search(
-        r"Nasdaq\s+100.{0,140}?(\d{1,2}(?:\.\d+)?).{0,140}?(\d{1,3}(?:\.\d+)?)\s*%.{0,160}?"
-        r"(?:Attractive|Undervalued|Fair\s+Value|Overvalued|Expensive).{0,160}?"
-        r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},\s+\d{4})",
-        text,
+    # Current dedicated-page snippets expose all three required fields in one result:
+    # "The current P/E Ratio of 20.7 ranks in the 21.7th percentile ..."
+    valuation = re.search(
+        r"current\s+P/E\s+Ratio\s+of\s+(\d+(?:\.\d+)?)\s+ranks\s+in\s+the\s+"
+        r"(\d+(?:\.\d+)?)(?:st|nd|rd|th)?\s+percentile",
+        block,
         re.I,
     )
-    if not m:
-        raise ValueError("Nasdaq 100 table row not found")
-    return Candidate(float(m.group(1)), float(m.group(2)), parse_date(m.group(3)).isoformat(), CANONICAL, kind + "-text", method)
+    if not valuation:
+        raise ValueError("forward P/E and 10Y percentile pair not found")
+
+    # DuckDuckGo exposes the indexed page date immediately after the result URL.
+    date_match = re.search(
+        r"trendonify\.com/united-states/stock-market/nasdaq-100/forward-pe-ratio\s+"
+        r"(20\d{2}-\d{2}-\d{2})T",
+        block,
+        re.I,
+    )
+    if not date_match:
+        raise ValueError("Trendonify data/index date not found")
+
+    return float(valuation.group(1)), float(valuation.group(2)), date_match.group(1)
 
 
-def parse_page(html: str, method: str, url: str, kind: str) -> Candidate:
-    text = clean(html)
-    m = re.search(r"currently\s+trades\s+at\s+a\s+forward\s+P/E\s+ratio\s+of\s+(\d+(?:\.\d+)?)\s+as\s+of\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})", text, re.I)
-    if not m:
-        raise ValueError("forward P/E sentence not found")
-    window = text[m.end():m.end()+1200]
-    p = re.search(r"Valuation\s+Percentile\s+Rank\s+(\d+(?:\.\d+)?)%", window, re.I)
-    if not p:
-        p = re.search(r"ranks\s+in\s+the\s+(\d+(?:\.\d+)?)(?:st|nd|rd|th)?\s+percentile", window, re.I)
-    if not p:
-        raise ValueError("10Y percentile not found")
-    return Candidate(float(m.group(1)), float(p.group(1)), parse_date(m.group(2)).isoformat(), url, kind, method)
-
-
-def validate(c: Candidate, previous_date=None):
-    if not math.isfinite(c.forward_pe) or not (1 <= c.forward_pe <= 100):
+def validate(forward_pe: float, percentile: float, data_date: str, previous_date=None):
+    if not math.isfinite(forward_pe) or not (1 <= forward_pe <= 100):
         raise ValueError("invalid forward_pe")
-    if not math.isfinite(c.percentile_10y) or not (0 <= c.percentile_10y <= 100):
+    if not math.isfinite(percentile) or not (0 <= percentile <= 100):
         raise ValueError("invalid percentile")
-    d = parse_date(c.data_date)
+    d = parse_date(data_date)
     today = datetime.now(timezone.utc).date()
     if d > today + timedelta(days=1) or d < today - timedelta(days=10):
         raise ValueError("implausible data date")
     if previous_date and d < previous_date:
         raise ValueError("data date rollback")
-
-
-def fetch_html(url: str, attempts: int = 2, stop_on_403: bool = False):
-    errors = []
-    for attempt in range(1, attempts + 1):
-        if curl_requests is not None:
-            try:
-                r = curl_requests.get(url, headers=HEADERS, impersonate="chrome", timeout=25, allow_redirects=True)
-                if r.status_code == 200 and len(r.text) > 200:
-                    return r.text, f"curl-cffi-attempt-{attempt}"
-                errors.append(f"curl:{r.status_code}")
-                if stop_on_403 and r.status_code == 403:
-                    break
-            except Exception as e:
-                errors.append(f"curl:{e}")
-        try:
-            req = Request(url, headers=HEADERS)
-            with urlopen(req, timeout=25) as r:
-                text = r.read().decode("utf-8", "replace")
-            if len(text) > 200:
-                return text, f"urllib-attempt-{attempt}"
-        except Exception as e:
-            errors.append(f"urllib:{e}")
-            if stop_on_403 and "403" in str(e):
-                break
-        if attempt < attempts:
-            time.sleep(attempt * 2)
-    raise RuntimeError("; ".join(errors[-6:]))
 
 
 def load_previous():
@@ -150,7 +96,19 @@ def load_previous():
         return {}
 
 
-def acquire(previous):
+def fetch_once():
+    req = Request(SEARCH_URL, headers=HEADERS)
+    with urlopen(req, timeout=25) as response:
+        if response.status != 200:
+            raise RuntimeError(f"search HTTP {response.status}")
+        raw = response.read().decode("utf-8", "replace")
+    if len(raw) < 1000:
+        raise RuntimeError("search response too short")
+    return raw
+
+
+def main():
+    previous = load_previous()
     previous_date = None
     if previous.get("ok") is True and previous.get("data_date"):
         try:
@@ -158,75 +116,32 @@ def acquire(previous):
         except Exception:
             pass
 
-    errors = []
-
     try:
-        html, method = fetch_html(CANONICAL, attempts=1, stop_on_403=True)
-        c = parse_table(html, method)
-        validate(c, previous_date)
-        return c
-    except Exception as e:
-        errors.append(f"canonical-direct: {type(e).__name__}: {e}")
-
-    try:
-        html, method = fetch_html(JINA_PREFIX + CANONICAL, attempts=2)
-        c = parse_table(html, f"jina-reader/{method}", kind="forward-pe-ratio-table-jina")
-        validate(c, previous_date)
-        return c
-    except Exception as e:
-        errors.append(f"jina-canonical: {type(e).__name__}: {e}")
-
-    for engine, url in SEARCH_URLS:
-        try:
-            html, method = fetch_html(url, attempts=1)
-            c = parse_table(html, f"{engine}-search-index/{method}", kind=f"search-index-{engine}")
-            validate(c, previous_date)
-            return c
-        except Exception as e:
-            errors.append(f"search-{engine}: {type(e).__name__}: {e}")
-
-    for url, kind in ((MAIN, "nasdaq-100-main-page"), (DEDICATED, "dedicated-forward-pe-page")):
-        try:
-            html, method = fetch_html(JINA_PREFIX + url, attempts=1)
-            c = parse_page(html, f"jina-reader/{method}", url, kind + "-jina")
-            validate(c, previous_date)
-            return c
-        except Exception as e:
-            errors.append(f"{kind}-jina: {type(e).__name__}: {e}")
-        try:
-            html, method = fetch_html(url, attempts=1, stop_on_403=True)
-            c = parse_page(html, method, url, kind)
-            validate(c, previous_date)
-            return c
-        except Exception as e:
-            errors.append(f"{kind}-direct: {type(e).__name__}: {e}")
-
-    raise RuntimeError(" | ".join(errors))
-
-
-def main():
-    previous = load_previous()
-    try:
-        c = acquire(previous)
+        # Exactly one search request per run. Repeated queries from the same runner are more
+        # likely to trigger a challenge; the 5-minute workflow cadence provides natural retry.
+        raw = fetch_once()
+        forward_pe, percentile, data_date = parse_search_index(raw)
+        validate(forward_pe, percentile, data_date, previous_date)
         payload = {
             "schema_version": 2,
             "ok": True,
-            "forward_pe": round(c.forward_pe, 4),
-            "percentile_10y": round(c.percentile_10y, 4),
-            "data_date": c.data_date,
+            "forward_pe": round(forward_pe, 4),
+            "percentile_10y": round(percentile, 4),
+            "data_date": data_date,
             "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "source": "Trendonify",
-            "source_url": c.source_url,
-            "source_kind": c.source_kind,
-            "fetch_method": c.fetch_method,
+            "source_url": DEDICATED,
+            "source_kind": "dedicated-forward-pe-search-index",
+            "fetch_method": "duckduckgo-lite",
         }
         tmp = LATEST.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         tmp.replace(LATEST)
         print(json.dumps(payload))
         return 0
-    except Exception as e:
-        print(f"ERROR: {type(e).__name__}: {e}", file=sys.stderr)
+    except Exception as exc:
+        # Never overwrite a known-good reading with an acquisition/parser failure.
+        print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
 
 
