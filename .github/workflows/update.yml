@@ -1,0 +1,99 @@
+name: Update Nasdaq 100 Forward P/E
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "fetch.py"
+      - "test_fetch.py"
+      - ".github/workflows/update.yml"
+  workflow_dispatch:
+  schedule:
+    # Avoid minute 0, when scheduled Actions are commonly congested.
+    - cron: "2-57/5 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nasdaq100-forward-pe-update
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check beautifulsoup4 curl-cffi
+
+      - name: Run regression tests
+        run: python -m unittest -v test_fetch.py
+
+      - name: Fetch and validate Trendonify
+        run: python fetch.py
+
+      - name: Decide whether a commit is needed
+        id: decide
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          from datetime import datetime, timezone
+
+          with open("latest.json", encoding="utf-8") as f:
+              new = json.load(f)
+          try:
+              old = json.loads(subprocess.check_output(
+                  ["git", "show", "HEAD:latest.json"], text=True, stderr=subprocess.DEVNULL
+              ))
+          except Exception:
+              old = {}
+
+          keys = ("schema_version", "ok", "forward_pe", "percentile_10y",
+                  "data_date", "source", "source_url", "source_kind")
+          material = any(old.get(k) != new.get(k) for k in keys)
+          heartbeat = False
+          if not material:
+              try:
+                  old_ts = datetime.fromisoformat(old["fetched_at"].replace("Z", "+00:00"))
+                  heartbeat = (datetime.now(timezone.utc) - old_ts).total_seconds() >= 3300
+              except Exception:
+                  heartbeat = True
+
+          needed = material or heartbeat
+          print(f"material={material} heartbeat={heartbeat} needed={needed}")
+          with open("/tmp/needed", "w") as f:
+              f.write("true" if needed else "false")
+          PY
+          echo "needed=$(cat /tmp/needed)" >> "$GITHUB_OUTPUT"
+
+      - name: Commit latest.json
+        if: steps.decide.outputs.needed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add latest.json
+          git commit -m "Update Nasdaq 100 forward P/E"
+
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "push failed; retry ${attempt}/3"
+            git pull --rebase origin main
+            sleep $((attempt * 2))
+          done
+          exit 1
