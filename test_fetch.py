@@ -28,6 +28,16 @@ class ParserTests(unittest.TestCase):
     def test_good_dedicated_result(self):
         self.assertEqual(parse_search_index(GOOD), (20.7, 21.7, "2026-09-08"))
 
+    def test_result_identity_is_case_insensitive(self):
+        raw = GOOD.replace(
+            "Nasdaq 100 Forward PE Ratio - trendonify.com",
+            "NASDAQ 100 Forward PE Ratio - Trendonify.com",
+        ).replace(
+            "trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio",
+            "TRENDONIFY.COM/united-states/stock-market/nasdaq-100/forward-pe-ratio",
+        )
+        self.assertEqual(parse_search_index(raw), (20.7, 21.7, "2026-09-08"))
+
     def test_identical_duplicate_is_accepted(self):
         self.assertEqual(parse_search_index(GOOD + GOOD), (20.7, 21.7, "2026-09-08"))
 
@@ -97,6 +107,16 @@ class ValueValidationTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "same-date"):
             validate_transition(30.0, 20.0, today, previous)
+
+    def test_large_but_plausible_same_date_market_move_is_accepted(self):
+        today = date.today().isoformat()
+        previous = {
+            "ok": True,
+            "forward_pe": 20.0,
+            "percentile_10y": 50.0,
+            "data_date": today,
+        }
+        validate_transition(16.0, 15.0, today, previous)
 
     def test_reasonable_transition_is_accepted(self):
         today = date.today().isoformat()
