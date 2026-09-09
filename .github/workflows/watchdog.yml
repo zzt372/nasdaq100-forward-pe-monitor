@@ -1,0 +1,82 @@
+name: Watchdog Nasdaq 100 Forward P/E
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nasdaq100-forward-pe-update
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check latest.json freshness
+        id: freshness
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from datetime import datetime, timezone
+
+          stale = True
+          try:
+              with open("latest.json", encoding="utf-8") as f:
+                  data = json.load(f)
+              ts = datetime.fromisoformat(data["fetched_at"].replace("Z", "+00:00"))
+              age = (datetime.now(timezone.utc) - ts).total_seconds()
+              stale = data.get("ok") is not True or age >= 4500
+              print(f"age_seconds={age:.0f} stale={stale}")
+          except Exception as exc:
+              print(f"freshness check failed: {exc}")
+              stale = True
+
+          with open("/tmp/stale", "w") as f:
+              f.write("true" if stale else "false")
+          PY
+          echo "stale=$(cat /tmp/stale)" >> "$GITHUB_OUTPUT"
+
+      - name: Run regression tests
+        if: steps.freshness.outputs.stale == 'true'
+        run: python -m unittest -v test_fetch.py
+
+      - name: Recover latest.json
+        if: steps.freshness.outputs.stale == 'true'
+        run: python fetch.py
+
+      - name: Commit recovered state
+        if: steps.freshness.outputs.stale == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add latest.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Watchdog refresh Nasdaq 100 forward P/E"
+
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            git pull --rebase origin main
+            sleep $((attempt * 2))
+          done
+          exit 1
