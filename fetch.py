@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parent
 LATEST = ROOT / "latest.json"
 DEDICATED = "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
-SEARCH_QUERY = 'site:trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio "Forward PE Ratio" percentile'
+SEARCH_QUERY = 'Trendonify "NASDAQ-100 Forward PE Ratio"'
 SEARCH_URL = "https://lite.duckduckgo.com/lite/?q=" + quote_plus(SEARCH_QUERY)
 SOURCE_KIND = "dedicated-forward-pe-search-index"
 FETCH_METHOD = "duckduckgo-lite"
@@ -159,6 +159,8 @@ def parse_search_index(raw: str):
     )
     if any(marker in low for marker in challenge_markers):
         raise RuntimeError("DuckDuckGo bot challenge")
+    if "no results found for" in low:
+        raise ValueError("DuckDuckGo returned no results")
 
     candidates = set()
     for block in _find_result_blocks(text):
