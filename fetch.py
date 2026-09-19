@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parent
 LATEST = ROOT / "latest.json"
 DEDICATED = "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
-SEARCH_QUERY = 'Trendonify "NASDAQ-100 Forward PE Ratio"'
+SEARCH_QUERY = 'Trendonify "NASDAQ-100 Forward PE Ratio" percentile'
 SEARCH_URL = "https://lite.duckduckgo.com/lite/?q=" + quote_plus(SEARCH_QUERY)
 SOURCE_KIND = "dedicated-forward-pe-search-index"
 FETCH_METHOD = "duckduckgo-lite"
