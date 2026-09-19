@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parent
 LATEST = ROOT / "latest.json"
 DEDICATED = "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
-SEARCH_QUERY = 'Trendonify "Nasdaq 100 Forward PE Ratio" "percentile"'
+SEARCH_QUERY = 'site:trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio "Forward PE Ratio" percentile'
 SEARCH_URL = "https://lite.duckduckgo.com/lite/?q=" + quote_plus(SEARCH_QUERY)
 SOURCE_KIND = "dedicated-forward-pe-search-index"
 FETCH_METHOD = "duckduckgo-lite"
@@ -65,6 +65,89 @@ def textify(raw: str) -> str:
     return " ".join(htmlmod.unescape(raw).split())
 
 
+def _find_result_blocks(text: str):
+    exact_url = "trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
+    low = text.lower()
+    positions = [m.start() for m in re.finditer(re.escape(exact_url), low)]
+    if not positions:
+        raise ValueError("Trendonify dedicated result not found")
+
+    blocks = []
+    for i, pos in enumerate(positions):
+        if i == 0:
+            start = max(0, pos - 1200)
+        else:
+            start = max(0, (positions[i - 1] + pos) // 2)
+
+        if i + 1 < len(positions):
+            end = min(len(text), (pos + positions[i + 1]) // 2)
+        else:
+            end = min(len(text), pos + 4500)
+        blocks.append(text[start:end])
+    return blocks
+
+
+def _extract_tuple(block: str):
+    valuation = re.search(
+        r"current\s+P/E\s+Ratio\s+of\s+(\d+(?:\.\d+)?)\s+ranks\s+in\s+the\s+"
+        r"(\d+(?:\.\d+)?)(?:st|nd|rd|th)?\s+percentile",
+        block,
+        re.I,
+    )
+
+    if valuation:
+        forward_pe = float(valuation.group(1))
+        percentile = float(valuation.group(2))
+    else:
+        pe_match = re.search(
+            r"currently\s+trades\s+at\s+a\s+forward\s+P/E\s+ratio\s+of\s+"
+            r"(\d+(?:\.\d+)?)",
+            block,
+            re.I,
+        )
+        pct_match = re.search(
+            r"(?:current\s+reading|current\s+value|ratio)\s+ranks\s+"
+            r"(?:in\s+the\s+|at\s+the\s+)?"
+            r"(\d+(?:\.\d+)?)(?:st|nd|rd|th)?\s+percentile",
+            block,
+            re.I,
+        )
+        if not pe_match or not pct_match:
+            return None
+        forward_pe = float(pe_match.group(1))
+        percentile = float(pct_match.group(1))
+
+    exact_url = "trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
+    date_match = re.search(
+        re.escape(exact_url) + r"\s+(20\d{2}-\d{2}-\d{2})T",
+        block,
+        re.I,
+    )
+    if date_match:
+        data_date = date_match.group(1)
+    else:
+        month = (
+            r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+            r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+        )
+        date_match = re.search(
+            r"Last\s+Updated\s*:?\s*(" + month + r"\s+\d{1,2},\s+20\d{2})",
+            block,
+            re.I,
+        )
+        if not date_match:
+            date_match = re.search(
+                r"as\s+of\s+(" + month + r"\s+\d{1,2},\s+20\d{2})",
+                block,
+                re.I,
+            )
+        if not date_match:
+            return None
+        data_date = parse_date(date_match.group(1)).isoformat()
+
+    return forward_pe, percentile, data_date
+
+
 def parse_search_index(raw: str):
     text = textify(raw)
     low = text.lower()
@@ -77,47 +160,17 @@ def parse_search_index(raw: str):
     if any(marker in low for marker in challenge_markers):
         raise RuntimeError("DuckDuckGo bot challenge")
 
-    marker = "Nasdaq 100 Forward PE Ratio - trendonify.com"
-    positions = [m.start() for m in re.finditer(re.escape(marker), text, flags=re.I)]
-    if not positions:
-        raise ValueError("Trendonify dedicated result not found")
-
     candidates = set()
-    exact_url = "trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
-
-    for pos in positions:
-        block = text[pos : pos + 3500]
-        if exact_url not in block.lower():
-            continue
-
-        valuation = re.search(
-            r"current\s+P/E\s+Ratio\s+of\s+(\d+(?:\.\d+)?)\s+ranks\s+in\s+the\s+"
-            r"(\d+(?:\.\d+)?)(?:st|nd|rd|th)?\s+percentile",
-            block,
-            re.I,
-        )
-        date_match = re.search(
-            r"trendonify\.com/united-states/stock-market/nasdaq-100/forward-pe-ratio\s+"
-            r"(20\d{2}-\d{2}-\d{2})T",
-            block,
-            re.I,
-        )
-        if valuation and date_match:
-            candidates.add(
-                (
-                    float(valuation.group(1)),
-                    float(valuation.group(2)),
-                    date_match.group(1),
-                )
-            )
+    for block in _find_result_blocks(text):
+        candidate = _extract_tuple(block)
+        if candidate is not None:
+            candidates.add(candidate)
 
     if not candidates:
         raise ValueError("complete Trendonify P/E, percentile, date tuple not found")
     if len(candidates) != 1:
         raise ValueError(f"conflicting Trendonify snippets: {sorted(candidates)}")
     return next(iter(candidates))
-
-
 def validate_values(
     forward_pe: float,
     percentile: float,
