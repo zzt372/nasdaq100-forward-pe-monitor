@@ -5,6 +5,7 @@ from fetch import (
     DEDICATED,
     FETCH_METHOD,
     SOURCE_KIND,
+    SEARCH_QUERY,
     build_payload,
     parse_search_index,
     validate_payload,
@@ -23,16 +24,34 @@ trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio 2026-09-08
 </body></html>
 '''
 
+CURRENT_STYLE = '''
+<html><body>
+NASDAQ-100 Forward PE Ratio
+trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio
+Last Updated: September 18, 2026
+The NASDAQ-100 currently trades at a forward P/E ratio of 20.6 as of September 18, 2026.
+Looking at the longer 10-year period, where the median sits at 22.91, the current reading ranks in the 20.8th percentile.
+</body></html>
+'''
+
+
 
 class ParserTests(unittest.TestCase):
+    def test_query_targets_exact_dedicated_path_without_brittle_old_title(self):
+        self.assertIn(
+            "site:trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio",
+            SEARCH_QUERY,
+        )
+        self.assertNotIn('"Nasdaq 100 Forward PE Ratio"', SEARCH_QUERY)
+
     def test_good_dedicated_result(self):
         self.assertEqual(parse_search_index(GOOD), (20.7, 21.7, "2026-09-08"))
 
+    def test_current_hyphenated_title_and_last_updated_style(self):
+        self.assertEqual(parse_search_index(CURRENT_STYLE), (20.6, 20.8, "2026-09-18"))
+
     def test_result_identity_is_case_insensitive(self):
         raw = GOOD.replace(
-            "Nasdaq 100 Forward PE Ratio - trendonify.com",
-            "NASDAQ 100 Forward PE Ratio - Trendonify.com",
-        ).replace(
             "trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio",
             "TRENDONIFY.COM/united-states/stock-market/nasdaq-100/forward-pe-ratio",
         )
@@ -53,8 +72,8 @@ class ParserTests(unittest.TestCase):
 
     def test_other_provider_rejected(self):
         raw = GOOD.replace(
-            "Nasdaq 100 Forward PE Ratio - trendonify.com",
-            "Nasdaq 100 Forward PE Ratio - example.com",
+            "trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio",
+            "example.com/united-states/stock-market/nasdaq-100/forward-pe-ratio",
         )
         with self.assertRaises(ValueError):
             parse_search_index(raw)
