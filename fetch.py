@@ -317,7 +317,18 @@ def run_fetch():
             pass
 
     raw = fetch_once()
-    forward_pe, percentile, data_date = parse_search_index(raw)
+    try:
+        forward_pe, percentile, data_date = parse_search_index(raw)
+    except Exception:
+        # Keep a narrow, public search-index excerpt in Actions logs so future
+        # result-format changes can be diagnosed without dumping the whole page.
+        text = textify(raw)
+        exact_url = "trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
+        pos = text.lower().find(exact_url)
+        if pos >= 0:
+            context = text[max(0, pos - 800): min(len(text), pos + 2600)]
+            print(f"SEARCH_INDEX_CONTEXT: {context}", file=sys.stderr)
+        raise
     validate_values(forward_pe, percentile, data_date, previous_date=previous_date)
     validate_transition(forward_pe, percentile, data_date, previous)
     payload = build_payload(forward_pe, percentile, data_date)
