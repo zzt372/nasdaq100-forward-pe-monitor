@@ -37,12 +37,13 @@ Looking at the longer 10-year period, where the median sits at 22.91, the curren
 
 
 class ParserTests(unittest.TestCase):
-    def test_query_targets_exact_dedicated_path_without_brittle_old_title(self):
-        self.assertIn(
-            "site:trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio",
-            SEARCH_QUERY,
-        )
-        self.assertNotIn('"Nasdaq 100 Forward PE Ratio"', SEARCH_QUERY)
+    def test_query_tracks_current_dedicated_title(self):
+        self.assertEqual(SEARCH_QUERY, 'Trendonify "NASDAQ-100 Forward PE Ratio"')
+
+    def test_no_results_page_is_explicitly_rejected(self):
+        raw = '<html><body>No results found for Trendonify "NASDAQ-100 Forward PE Ratio"</body></html>'
+        with self.assertRaisesRegex(ValueError, "no results"):
+            parse_search_index(raw)
 
     def test_good_dedicated_result(self):
         self.assertEqual(parse_search_index(GOOD), (20.7, 21.7, "2026-09-08"))
