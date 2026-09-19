@@ -38,6 +38,8 @@ jobs:
       - name: Run regression tests
         run: python -m unittest -v test_fetch.py
 
+      # The query is intentionally tuned to the dedicated page title plus
+      # "percentile" so DuckDuckGo Lite returns the valuation snippet.
       - name: Fetch and validate Trendonify search index
         run: python fetch.py
 

@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     paths:
+      - "fetch.py"
+      - "test_fetch.py"
       - ".github/workflows/watchdog.yml"
   workflow_dispatch:
   schedule:
