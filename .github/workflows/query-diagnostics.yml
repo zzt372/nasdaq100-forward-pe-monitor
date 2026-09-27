@@ -1,0 +1,38 @@
+name: Diagnose DuckDuckGo Query Variants
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/query-diagnostics.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  query:
+    strategy:
+      fail-fast: false
+      matrix:
+        index: [0, 1, 2]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Test one query on a fresh runner
+        env:
+          QUERY_INDEX: ${{ matrix.index }}
+        run: |
+          python - <<'PY'
+          import os
+          from fetch import SEARCH_QUERIES, fetch_once, parse_search_index
+          i = int(os.environ["QUERY_INDEX"])
+          q = SEARCH_QUERIES[i]
+          print(f"QUERY_INDEX={i}")
+          print(f"QUERY={q}")
+          raw = fetch_once(q)
+          print("RESULT=", parse_search_index(raw))
+          PY
