@@ -9,10 +9,10 @@ on:
       - ".github/workflows/update.yml"
   workflow_dispatch:
   schedule:
-    # Trendonify is effectively daily for this series; 10-minute fresh-runner polling
-    # is fast enough while materially reducing search-index challenge pressure.
+    # Trendonify is effectively daily. A 30-minute cadence keeps consumer freshness
+    # inside the 90-minute SLA while sharply reducing DuckDuckGo anti-bot pressure.
     # Avoid minute 0, where GitHub documents higher schedule congestion.
-    - cron: "3-53/10 * * * *"
+    - cron: "3,33 * * * *"
 
 permissions:
   contents: write
@@ -38,9 +38,8 @@ jobs:
       - name: Run regression tests
         run: python -m unittest -v test_fetch.py
 
-      # Start with the dedicated page title + percentile query. If DuckDuckGo
-      # returns no usable dedicated-page snippet, fetch.py can try two bounded
-      # query variants while still accepting only the exact dedicated URL.
+      # One search request per fresh runner. Repeated queries from the same runner
+      # can provoke DuckDuckGo HTTP 202 / anti-bot responses.
       - name: Fetch and validate Trendonify search index
         run: python fetch.py
 
@@ -74,7 +73,7 @@ jobs:
           if not material:
               try:
                   old_ts = datetime.fromisoformat(old["fetched_at"].replace("Z", "+00:00"))
-                  heartbeat = (datetime.now(timezone.utc) - old_ts).total_seconds() >= 2400
+                  heartbeat = (datetime.now(timezone.utc) - old_ts).total_seconds() >= 3000
               except Exception:
                   heartbeat = True
 

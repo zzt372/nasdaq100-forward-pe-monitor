@@ -6,8 +6,6 @@ from fetch import (
     FETCH_METHOD,
     SOURCE_KIND,
     SEARCH_QUERY,
-    SEARCH_QUERIES,
-    acquire_search_tuple,
     build_payload,
     parse_search_index,
     validate_payload,
@@ -41,8 +39,6 @@ Looking at the longer 10-year period, where the median sits at 22.91, the curren
 class ParserTests(unittest.TestCase):
     def test_query_tracks_current_dedicated_title(self):
         self.assertEqual(SEARCH_QUERY, 'Trendonify "NASDAQ-100 Forward PE Ratio" percentile')
-        self.assertEqual(len(SEARCH_QUERIES), 3)
-        self.assertEqual(SEARCH_QUERY, SEARCH_QUERIES[0])
 
     def test_no_results_page_is_explicitly_rejected(self):
         raw = '<html><body>No results found for Trendonify "NASDAQ-100 Forward PE Ratio"</body></html>'
@@ -95,62 +91,6 @@ class ParserTests(unittest.TestCase):
         raw = GOOD.replace("2026-09-08T00:00:00.0000000", "date unavailable")
         with self.assertRaises(ValueError):
             parse_search_index(raw)
-
-    def test_query_fallback_uses_second_variant_after_no_results(self):
-        calls = []
-        responses = [
-            '<html><body>No results found for first query</body></html>',
-            GOOD,
-        ]
-
-        def fake_fetch(query):
-            calls.append(query)
-            return responses[len(calls) - 1]
-
-        result = acquire_search_tuple(fetcher=fake_fetch, sleeper=lambda _: None)
-        self.assertEqual(result[:3], (20.7, 21.7, "2026-09-08"))
-        self.assertEqual(result[3], SEARCH_QUERIES[1])
-        self.assertEqual(calls, list(SEARCH_QUERIES[:2]))
-
-    def test_query_fallback_continues_after_incomplete_snippet(self):
-        calls = []
-        incomplete = '''
-        <html><body>
-        NASDAQ-100 Forward PE Ratio
-        trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio
-        Definition: Forward P/E Ratio
-        </body></html>
-        '''
-
-        def fake_fetch(query):
-            calls.append(query)
-            return incomplete if len(calls) == 1 else CURRENT_STYLE
-
-        result = acquire_search_tuple(fetcher=fake_fetch, sleeper=lambda _: None)
-        self.assertEqual(result[:3], (20.6, 20.8, "2026-09-18"))
-        self.assertEqual(result[3], SEARCH_QUERIES[1])
-
-    def test_bot_challenge_does_not_issue_fallback_queries(self):
-        calls = []
-
-        def fake_fetch(query):
-            calls.append(query)
-            return "Unfortunately, bots use DuckDuckGo too. Select all squares containing a duck."
-
-        with self.assertRaises(RuntimeError):
-            acquire_search_tuple(fetcher=fake_fetch, sleeper=lambda _: None)
-        self.assertEqual(calls, [SEARCH_QUERIES[0]])
-
-    def test_all_query_variants_fail_closed(self):
-        calls = []
-
-        def fake_fetch(query):
-            calls.append(query)
-            return "<html><body>No results found for query</body></html>"
-
-        with self.assertRaisesRegex(ValueError, "all DuckDuckGo query variants failed"):
-            acquire_search_tuple(fetcher=fake_fetch, sleeper=lambda _: None)
-        self.assertEqual(calls, list(SEARCH_QUERIES))
 
 
 class ValueValidationTests(unittest.TestCase):

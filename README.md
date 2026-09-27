@@ -4,19 +4,19 @@ Trendonify の **Nasdaq 100 Forward PE Ratio** を監視する GitHub Actions �
 
 ## 本番構成
 
-- メインワークフローは UTC の `3,13,23,33,43,53` 分、つまり約10分ごとに実行します。
-- 独立した Watchdog は UTC の `8,28,48` 分に実行し、commit 済み状態が厳格な健全性検証に失敗した場合、または `fetched_at` が60分以上古い場合だけ復旧処理を行います。
+- メインワークフローは UTC の `3,33` 分、つまり約30分ごとに新しい GitHub-hosted runner で実行します。
+- 独立した Watchdog は UTC の `18,48` 分に実行し、commit 済み状態が厳格な健全性検証に失敗した場合、または `fetched_at` が55分以上古い場合だけ別runnerで復旧処理を行います。
 - メインと Watchdog は同じ GitHub Actions concurrency group を `queue: max` で共有し、重複実行時はキャンセルではなく直列化します。
 - 追跡対象の Trendonify 系列は、次の Nasdaq 100 Forward PE Ratio 専用ページに固定しています。
   `https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio`
 - Trendonify は GitHub-hosted runner のIPを HTTP 403 / Cloudflare で拒否することがあるため、実値は DuckDuckGo Lite 経由で **上記の専用Trendonifyページそのものの公開検索インデックス結果** を読み取ります。DuckDuckGo はあくまで転送経路であり、他ドメインの値は採用しません。
-- 通常は1つ目の検索クエリだけを使います。DuckDuckGo Lite が `No results`、専用結果欠落、または必要3項目不足を返した場合だけ、同じTrendonify専用ページを狙う別表現へ最大2回fallbackします（最大3クエリ）。
-- fallback間には2秒待機し、bot / CAPTCHA challenge やHTTP等のhard failureでは追加検索せず即時fail closedします。
+- 1runnerにつき検索リクエストは1回だけです。実地検証で、同じrunnerから検索を連打すると `HTTP 202` / anti-bot 応答に移行しやすく、別表現の検索語は古い検索キャッシュを返すことが確認できたため、同一runner内の検索fallbackは行いません。
+- 取得失敗時は既知の正常値を保持し、次のメイン実行または独立Watchdogの新しいrunnerに再試行を委ねます。
 - 正常値として採用するには、**Forward P/E・10年パーセンタイル・インデックス上の日付** の3項目が、同じTrendonify結果ブロック内に揃っている必要があります。別のTrendonifyページや別の検索結果から値を合成しません。
 - 同一内容の重複結果ブロックは許可しますが、値が矛盾する重複結果はfail closedで拒否します。
 - 取得、解析、source identity、鮮度、sanity checkのいずれかに失敗した場合、last-known-good の `latest.json` は上書きしません。
 - 毎回の本番取得前に回帰テストを実行し、生成したpayloadもcommit前に再検証します。
-- 値・日付・source等に実質的な変化があれば即commitします。値が変わらない場合でも約40分ごとにheartbeat commitを行い、10分ごとに不要なcommitを増やさず、consumer側が鮮度を確認できるようにします。
+- 値・日付・source等に実質的な変化があれば即commitします。値が変わらない場合でも約50分以上経過していればheartbeat commitを行い、consumer側が鮮度を確認できるようにします。
 - GitHub Actions の `checkout` と `setup-python` は現在の v7 系を使用しています。
 - APIキーやRepository Secretsは不要です。
 
@@ -58,7 +58,7 @@ consumer側では以下を確認してください。
 - `source_kind == "dedicated-forward-pe-search-index"`
 - `fetch_method == "duckduckgo-lite"`
 
-ChatGPT側のconsumerでは `fetched_at` を約90分まで許容します。GitHubのscheduled workflowはbest-effortであり、一方で独立Watchdogはcommit済みデータが60分を超えて古くなった時点から復旧を開始するためです。
+ChatGPT側のconsumerでは `fetched_at` を約90分まで許容します。GitHubのscheduled workflowはbest-effortであり、一方で独立Watchdogはcommit済みデータが55分を超えて古くなった時点から別runnerで復旧を開始するためです。
 
 ## 実施済みの障害系テスト
 
