@@ -14,7 +14,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        index: [0, 1, 2]
+        include:
+          - index: 0
+            query: 'Trendonify "Nasdaq 100 Forward PE Ratio" "current rating"'
+          - index: 1
+            query: '"How does the current P/E Ratio compare historically for Nasdaq 100 Forward PE Ratio"'
+          - index: 2
+            query: 'Trendonify "Nasdaq 100 Forward PE Ratio" "ranks in the" percentile'
+          - index: 3
+            query: 'Trendonify "NASDAQ-100 currently trades at a forward P/E ratio of"'
+          - index: 4
+            query: 'Trendonify Nasdaq 100 Forward PE Ratio Undervalued percentile'
+          - index: 5
+            query: 'Trendonify "Nasdaq 100 Forward PE Ratio" percentile'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -25,14 +37,17 @@ jobs:
       - name: Test one query on a fresh runner
         env:
           QUERY_INDEX: ${{ matrix.index }}
+          QUERY_TEXT: ${{ matrix.query }}
         run: |
           python - <<'PY'
           import os
-          from fetch import SEARCH_QUERIES, fetch_once, parse_search_index
-          i = int(os.environ["QUERY_INDEX"])
-          q = SEARCH_QUERIES[i]
-          print(f"QUERY_INDEX={i}")
+          from fetch import fetch_once, parse_search_index, validate_values
+          q = os.environ["QUERY_TEXT"]
+          print(f"QUERY_INDEX={os.environ['QUERY_INDEX']}")
           print(f"QUERY={q}")
           raw = fetch_once(q)
-          print("RESULT=", parse_search_index(raw))
+          result = parse_search_index(raw)
+          print("PARSED=", result)
+          validate_values(*result)
+          print("VALID=1")
           PY
