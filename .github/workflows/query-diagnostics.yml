@@ -21,8 +21,6 @@ jobs:
             base: 'https://www.bing.com/search?q='
           - engine: google
             base: 'https://www.google.com/search?q='
-          - engine: brave
-            base: 'https://search.brave.com/search?q='
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -30,7 +28,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Fetch one search transport
+      - name: Inspect raw result block
         env:
           ENGINE: ${{ matrix.engine }}
           BASE_URL: ${{ matrix.base }}
@@ -44,22 +42,24 @@ jobs:
 
           q = 'Trendonify "NASDAQ-100 Forward PE Ratio" percentile'
           url = os.environ["BASE_URL"] + quote_plus(q)
-          headers = {
+          req = Request(url, headers={
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
               "Accept-Language": "en-US,en;q=0.9",
-          }
-          print("ENGINE=", os.environ["ENGINE"])
-          req = Request(url, headers=headers)
+          })
           with urlopen(req, timeout=25) as r:
+              print("ENGINE=", os.environ["ENGINE"])
               print("STATUS=", r.status)
               raw = r.read(500000).decode("utf-8", "replace")
-          text = re.sub(r"<script[\s\S]*?</script>", " ", raw, flags=re.I)
-          text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
-          text = re.sub(r"<[^>]+>", " ", text)
-          text = " ".join(html.unescape(text).split())
+
           needle = "trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
-          pos = text.lower().find(needle)
-          print("FOUND=", pos >= 0)
+          low = html.unescape(raw).lower()
+          pos = low.find(needle)
+          print("RAW_FOUND=", pos >= 0)
           if pos >= 0:
-              print("CONTEXT=", text[max(0,pos-1000):pos+5000])
+              chunk = html.unescape(raw[max(0,pos-5000):pos+9000])
+              text = re.sub(r"<script[\s\S]*?</script>", " ", chunk, flags=re.I)
+              text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
+              text = re.sub(r"<[^>]+>", " ", text)
+              text = " ".join(html.unescape(text).split())
+              print("BLOCK_TEXT=", text[:8000])
           PY
