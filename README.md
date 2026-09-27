@@ -10,7 +10,8 @@ Trendonify の **Nasdaq 100 Forward PE Ratio** を監視する GitHub Actions �
 - 追跡対象の Trendonify 系列は、次の Nasdaq 100 Forward PE Ratio 専用ページに固定しています。
   `https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio`
 - Trendonify は GitHub-hosted runner のIPを HTTP 403 / Cloudflare で拒否することがあるため、実値は DuckDuckGo Lite 経由で **上記の専用Trendonifyページそのものの公開検索インデックス結果** を読み取ります。DuckDuckGo はあくまで転送経路であり、他ドメインの値は採用しません。
-- 本番1回の実行につき検索リクエストは1回だけです。同一runnerから検索を連打するとbot challengeの確率が上がるため、意図的に再検索を行いません。
+- 通常は1つ目の検索クエリだけを使います。DuckDuckGo Lite が `No results`、専用結果欠落、または必要3項目不足を返した場合だけ、同じTrendonify専用ページを狙う別表現へ最大2回fallbackします（最大3クエリ）。
+- fallback間には2秒待機し、bot / CAPTCHA challenge やHTTP等のhard failureでは追加検索せず即時fail closedします。
 - 正常値として採用するには、**Forward P/E・10年パーセンタイル・インデックス上の日付** の3項目が、同じTrendonify結果ブロック内に揃っている必要があります。別のTrendonifyページや別の検索結果から値を合成しません。
 - 同一内容の重複結果ブロックは許可しますが、値が矛盾する重複結果はfail closedで拒否します。
 - 取得、解析、source identity、鮮度、sanity checkのいずれかに失敗した場合、last-known-good の `latest.json` は上書きしません。

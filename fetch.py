@@ -5,6 +5,7 @@ import json
 import math
 import re
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -13,7 +14,12 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parent
 LATEST = ROOT / "latest.json"
 DEDICATED = "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
-SEARCH_QUERY = 'Trendonify "NASDAQ-100 Forward PE Ratio" percentile'
+SEARCH_QUERIES = (
+    'Trendonify "NASDAQ-100 Forward PE Ratio" percentile',
+    '"NASDAQ-100 Forward PE Ratio" "current P/E Ratio" percentile',
+    'Trendonify Nasdaq 100 "forward P/E ratio" "10-year" percentile',
+)
+SEARCH_QUERY = SEARCH_QUERIES[0]
 SEARCH_URL = "https://lite.duckduckgo.com/lite/?q=" + quote_plus(SEARCH_QUERY)
 SOURCE_KIND = "dedicated-forward-pe-search-index"
 FETCH_METHOD = "duckduckgo-lite"
@@ -267,8 +273,12 @@ def load_previous():
         return {}
 
 
-def fetch_once():
-    req = Request(SEARCH_URL, headers=HEADERS)
+def search_url(query: str):
+    return "https://lite.duckduckgo.com/lite/?q=" + quote_plus(query)
+
+
+def fetch_once(query=SEARCH_QUERY):
+    req = Request(search_url(query), headers=HEADERS)
     with urlopen(req, timeout=25) as response:
         if response.status != 200:
             raise RuntimeError(f"search HTTP {response.status}")
@@ -309,6 +319,38 @@ def check_latest(max_fetch_age_seconds):
     print(f"latest.json healthy; fetched_age_seconds={age:.0f}")
 
 
+def acquire_search_tuple(fetcher=fetch_once, sleeper=time.sleep):
+    errors = []
+    for index, query in enumerate(SEARCH_QUERIES, start=1):
+        try:
+            raw = fetcher(query)
+            return (*parse_search_index(raw), query)
+        except RuntimeError:
+            # Bot/CAPTCHA and transport-style hard failures should not trigger
+            # more requests from the same runner.
+            raise
+        except ValueError as exc:
+            errors.append(f"q{index}: {exc}")
+            print(f"SEARCH_QUERY_FAILED q{index}: {exc}", file=sys.stderr)
+
+            # Keep a narrow, public search-index excerpt in Actions logs so future
+            # result-format changes can be diagnosed without dumping the whole page.
+            try:
+                text = textify(raw)
+                exact_url = "trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
+                pos = text.lower().find(exact_url)
+                if pos >= 0:
+                    context = text[max(0, pos - 800): min(len(text), pos + 2600)]
+                    print(f"SEARCH_INDEX_CONTEXT q{index}: {context}", file=sys.stderr)
+            except Exception:
+                pass
+
+            if index < len(SEARCH_QUERIES):
+                sleeper(2)
+
+    raise ValueError("all DuckDuckGo query variants failed: " + " | ".join(errors))
+
+
 def run_fetch():
     previous = load_previous()
     previous_date = None
@@ -318,19 +360,8 @@ def run_fetch():
         except Exception:
             pass
 
-    raw = fetch_once()
-    try:
-        forward_pe, percentile, data_date = parse_search_index(raw)
-    except Exception:
-        # Keep a narrow, public search-index excerpt in Actions logs so future
-        # result-format changes can be diagnosed without dumping the whole page.
-        text = textify(raw)
-        exact_url = "trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
-        pos = text.lower().find(exact_url)
-        if pos >= 0:
-            context = text[max(0, pos - 800): min(len(text), pos + 2600)]
-            print(f"SEARCH_INDEX_CONTEXT: {context}", file=sys.stderr)
-        raise
+    forward_pe, percentile, data_date, used_query = acquire_search_tuple()
+    print(f"SEARCH_QUERY_USED: {used_query}", file=sys.stderr)
     validate_values(forward_pe, percentile, data_date, previous_date=previous_date)
     validate_transition(forward_pe, percentile, data_date, previous)
     payload = build_payload(forward_pe, percentile, data_date)
