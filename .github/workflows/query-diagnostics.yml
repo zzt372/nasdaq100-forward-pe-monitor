@@ -1,4 +1,4 @@
-name: Diagnose Search Transports
+name: Diagnose DuckDuckGo Parameters
 
 on:
   push:
@@ -10,17 +10,19 @@ permissions:
   contents: read
 
 jobs:
-  transport:
+  probe:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - engine: ddg-html
-            base: 'https://html.duckduckgo.com/html/?q='
-          - engine: bing
-            base: 'https://www.bing.com/search?q='
-          - engine: google
-            base: 'https://www.google.com/search?q='
+          - name: base
+            suffix: ''
+          - name: us
+            suffix: '&kl=us-en'
+          - name: week
+            suffix: '&df=w'
+          - name: us-week
+            suffix: '&kl=us-en&df=w'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -28,10 +30,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Inspect raw result block
+      - name: Probe DuckDuckGo Lite
         env:
-          ENGINE: ${{ matrix.engine }}
-          BASE_URL: ${{ matrix.base }}
+          PROBE_NAME: ${{ matrix.name }}
+          SUFFIX: ${{ matrix.suffix }}
         run: |
           python - <<'PY'
           import html
@@ -41,25 +43,23 @@ jobs:
           from urllib.request import Request, urlopen
 
           q = 'Trendonify "NASDAQ-100 Forward PE Ratio" percentile'
-          url = os.environ["BASE_URL"] + quote_plus(q)
+          url = "https://lite.duckduckgo.com/lite/?q=" + quote_plus(q) + os.environ["SUFFIX"]
           req = Request(url, headers={
               "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
               "Accept-Language": "en-US,en;q=0.9",
           })
+          print("PROBE=", os.environ["PROBE_NAME"])
           with urlopen(req, timeout=25) as r:
-              print("ENGINE=", os.environ["ENGINE"])
               print("STATUS=", r.status)
               raw = r.read(500000).decode("utf-8", "replace")
-
+          text = re.sub(r"<script[\s\S]*?</script>", " ", raw, flags=re.I)
+          text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
+          text = re.sub(r"<[^>]+>", " ", text)
+          text = " ".join(html.unescape(text).split())
+          print("NO_RESULTS=", "no results found for" in text.lower())
           needle = "trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio"
-          low = html.unescape(raw).lower()
-          pos = low.find(needle)
-          print("RAW_FOUND=", pos >= 0)
+          pos = text.lower().find(needle)
+          print("FOUND=", pos >= 0)
           if pos >= 0:
-              chunk = html.unescape(raw[max(0,pos-5000):pos+9000])
-              text = re.sub(r"<script[\s\S]*?</script>", " ", chunk, flags=re.I)
-              text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
-              text = re.sub(r"<[^>]+>", " ", text)
-              text = " ".join(html.unescape(text).split())
-              print("BLOCK_TEXT=", text[:8000])
+              print("CONTEXT=", text[max(0,pos-700):pos+4500])
           PY
