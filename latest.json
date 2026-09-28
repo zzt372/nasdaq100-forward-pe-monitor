@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
   "ok": true,
-  "forward_pe": 21.27,
+  "forward_pe": 21.28,
   "percentile_10y": 35.0,
   "data_date": "2026-09-28",
-  "fetched_at": "2026-09-28T18:40:53.995788Z",
+  "fetched_at": "2026-09-28T23:56:36.600775Z",
   "source": "Trendonify",
   "source_url": "https://trendonify.com/united-states/stock-market/nasdaq-100/forward-pe-ratio",
   "source_kind": "dedicated-forward-pe-search-index",
