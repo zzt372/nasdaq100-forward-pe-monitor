@@ -5,6 +5,7 @@ from drawdown import build_payload, validate_payload
 
 
 class DrawdownTests(unittest.TestCase):
+    # Producer regression coverage for official Nasdaq close-history drawdown.
     def test_build_payload(self):
         rows = [
             {"date": "09/29/2026", "close": "90.00"},
