@@ -1,0 +1,58 @@
+name: Diagnose Nasdaq NDX API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ndx-api-diagnostic.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Probe official Nasdaq API
+        run: |
+          python - <<'PY'
+          import json
+          from urllib.request import Request, urlopen
+
+          headers = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
+              "Accept": "application/json, text/plain, */*",
+              "Accept-Language": "en-US,en;q=0.9",
+              "Referer": "https://www.nasdaq.com/",
+          }
+          urls = [
+              "https://api.nasdaq.com/api/quote/NDX/info?assetclass=index",
+              "https://api.nasdaq.com/api/quote/NDX/historical?assetclass=index&fromdate=2026-09-01&todate=2026-09-30&limit=50",
+              "https://api.nasdaq.com/api/quote/NDX/historical?assetclass=index&fromdate=1985-01-01&todate=2026-09-30&limit=5000&offset=0",
+          ]
+          for url in urls:
+              print("URL=", url)
+              req=Request(url,headers=headers)
+              with urlopen(req,timeout=25) as r:
+                  print("STATUS=",r.status)
+                  raw=r.read().decode("utf-8","replace")
+              obj=json.loads(raw)
+              print("TOP_KEYS=", list(obj.keys()))
+              data=obj.get("data")
+              print("DATA_TYPE=",type(data).__name__)
+              if isinstance(data,dict):
+                  print("DATA_KEYS=", list(data.keys()))
+                  table=data.get("tradesTable")
+                  if isinstance(table,dict):
+                      print("TABLE_KEYS=", list(table.keys()))
+                      rows=table.get("rows")
+                      print("ROWS=", len(rows) if isinstance(rows,list) else None)
+                      if isinstance(rows,list) and rows:
+                          print("FIRST=", rows[0])
+                          print("LAST=", rows[-1])
+              print("RAW_PREFIX=",raw[:1200])
+          PY
